@@ -1,0 +1,6 @@
+/.idea/
+/service-provider-api/
+/rawdata-client-*/
+/rawdata-state-*/
+/*.log
+/*.iml

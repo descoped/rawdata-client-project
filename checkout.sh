@@ -15,3 +15,5 @@ git clone git@github.com:statisticsnorway/rawdata-client-provider-local-filesyst
 echo "git clone git@github.com:statisticsnorway/rawdata-client-provider-kafka.git"
 git clone git@github.com:statisticsnorway/rawdata-client-provider-kafka.git
 
+echo "git clone git@github.com:statisticsnorway/rawdata-client-provider-gcp-filestore.git"
+git clone git@github.com:statisticsnorway/rawdata-client-provider-gcp-filestore.git

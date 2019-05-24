@@ -60,6 +60,7 @@
         <module>rawdata-client-api</module>
         <module>rawdata-state-provider-h2</module>
         <module>rawdata-client-provider-local-filesystem</module>
+        <module>rawdata-client-provider-kafka</module>
     </modules>
 
     <build>

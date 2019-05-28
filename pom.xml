@@ -8,6 +8,11 @@
     <version>0.1-SNAPSHOT</version>
     <packaging>pom</packaging>
 
+    <name>Rawdata Client Project</name>
+    <description>Rawdata Client Project</description>
+    <url>https://github.com/statisticsnorway/</url>
+    <inceptionYear>2019</inceptionYear>
+
     <properties>
         <java.version>11</java.version>
         <module.build.sourceEncoding>UTF-8</module.build.sourceEncoding>

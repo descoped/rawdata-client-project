@@ -65,7 +65,7 @@
         <module>rawdata-client-api</module>
         <module>rawdata-client-provider-postgres</module>
         <module>rawdata-client-provider-pulsar</module>
-        <module>rawdata-client-storage-provider-local-filesystem</module>
+        <module>rawdata-backup-local-filesystem</module>
     </modules>
 
     <build>

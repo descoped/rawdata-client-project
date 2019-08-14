@@ -6,11 +6,19 @@ git -C service-provider-api/ pull --rebase
 echo "git -C rawdata-client-api/ pull --rebase"
 git -C rawdata-client-api/ pull --rebase
 
-echo "git -C rawdata-client-state-provider-h2/ pull --rebase"
-git -C rawdata-client-state-provider-h2/ pull --rebase
-
 echo "git -C rawdata-client-provider-postgres/ pull --rebase"
 git -C rawdata-client-provider-postgres/ pull --rebase
+
+echo "git -C rawdata-client-provider-pulsar/ pull --rebase"
+git -C rawdata-client-provider-pulsar/ pull --rebase
+
+echo "git -C rawdata-backup-local-filesystem/ pull --rebase"
+git -C rawdata-backup-local-filesystem/ pull --rebase
+
+# Decomissioned
+
+echo "git -C rawdata-client-state-provider-h2/ pull --rebase"
+git -C rawdata-client-state-provider-h2/ pull --rebase
 
 echo "git -C rawdata-client-state-provider-postgres/ pull --rebase"
 git -C rawdata-client-state-provider-postgres/ pull --rebase

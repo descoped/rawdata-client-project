@@ -3,5 +3,6 @@
 /rawdata-client-*/
 /rawdata-backup-*/
 /rawdata-state-*/
+/target
 /*.log
 /*.iml

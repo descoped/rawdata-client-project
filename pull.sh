@@ -12,8 +12,15 @@ git -C rawdata-client-provider-postgres/ pull --rebase
 echo "git -C rawdata-client-provider-pulsar/ pull --rebase"
 git -C rawdata-client-provider-pulsar/ pull --rebase
 
-echo "git -C rawdata-backup-local-filesystem/ pull --rebase"
-git -C rawdata-backup-local-filesystem/ pull --rebase
+echo "git -C rawdata-client-provider-gcs/ pull --rebase"
+git -C rawdata-client-provider-gcs/ pull --rebase
+
+echo "git -C rawdata-client-provider-lmdb/ pull --rebase"
+git -C rawdata-client-provider-lmdb/ pull --rebase
+
+echo "git -C rawdata-copy-util/ pull --rebase"
+git -C rawdata-copy-util/ pull --rebase
+
 
 # Decomissioned
 
@@ -31,3 +38,7 @@ git -C rawdata-client-storage-provider-local-filesystem/ pull --rebase
 
 echo "git -C rawdata-client-storage-provider-gcp-filestore/ pull --rebase"
 git -C rawdata-client-storage-provider-gcp-filestore/ pull --rebase
+
+echo "git -C rawdata-backup-local-filesystem/ pull --rebase"
+git -C rawdata-backup-local-filesystem/ pull --rebase
+

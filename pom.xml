@@ -66,6 +66,7 @@
         <module>rawdata-client-provider-postgres</module>
         <module>rawdata-client-provider-pulsar</module>
         <module>rawdata-backup-local-filesystem</module>
+        <module>rawdata-client-streams-provider-kafka</module>
     </modules>
 
     <build>

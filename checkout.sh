@@ -6,9 +6,6 @@ git clone git@github.com:statisticsnorway/service-provider-api.git
 echo "git clone git@github.com:statisticsnorway/rawdata-client-api.git"
 git clone git@github.com:statisticsnorway/rawdata-client-api.git
 
-echo "git clone git@github.com:statisticsnorway/rawdata-client-payload-encryption.git"
-git clone git@github.com:statisticsnorway/rawdata-client-payload-encryption.git
-
 echo "git clone git@github.com:statisticsnorway/rawdata-client-provider-postgres.git"
 git clone git@github.com:statisticsnorway/rawdata-client-provider-postgres.git
 

@@ -9,6 +9,9 @@ git -C service-provider-api/ pull --rebase
 echo "git -C rawdata-client-api/ pull --rebase"
 git -C rawdata-client-api/ pull --rebase
 
+echo "git -C rawdata-client-payload-encryption/ pull --rebase"
+git -C rawdata-client-payload-encryption/ pull --rebase
+
 echo "git -C rawdata-client-provider-postgres/ pull --rebase"
 git -C rawdata-client-provider-postgres/ pull --rebase
 

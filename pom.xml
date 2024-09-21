@@ -61,14 +61,10 @@
 
 
     <modules>
-        <!--        <module>service-provider-api</module>-->
         <module>rawdata-client-api</module>
         <module>rawdata-client-provider-postgres</module>
-        <!--        <module>rawdata-client-provider-pulsar</module>-->
         <module>rawdata-client-provider-gcs</module>
-        <!--        <module>rawdata-client-provider-lmdb</module>-->
         <module>rawdata-copy-util</module>
-        <!--        <module>rawdata-client-provider-kafka</module>-->
     </modules>
 
     <build>

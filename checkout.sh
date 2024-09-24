@@ -14,3 +14,6 @@ git clone git@github.com:descoped/rawdata-client-provider-gcs.git
 
 echo "git clone git@github.com:descoped/rawdata-copy-util.git"
 git clone git@github.com:descoped/rawdata-copy-util.git
+
+echo "git clone git@github.com:descoped/rawdata-crypto-util.git"
+git clone git@github.com:descoped/rawdata-crypto-util.git

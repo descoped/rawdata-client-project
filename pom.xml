@@ -57,7 +57,6 @@
         <module>rawdata-client-provider-postgres</module>
         <module>rawdata-client-provider-gcs</module>
         <module>rawdata-copy-util</module>
-        <module>rawdata-crypto-util</module>
     </modules>
 
     <build>

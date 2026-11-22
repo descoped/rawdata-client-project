@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.0.2
+
+- `postgres`: publishing a message again is a no-op. A message whose given id is already in the topic, with the same
+  position, ordering group, sequence number and content, is not written twice, and the rest of the call is written; a
+  message repeated within one call is written once. A writer that recovers, such as a saga repeating its last step,
+  can publish its last message again. 3.0.1 refused it through the primary key. A different message under a stored
+  id is still refused with `RawdataException`, and nothing of the call is written.
+
 ## 3.0.1
 
 - Given ids are kept as they are, in any order, as in 2.x. 3.0.0 refused a given id that was not greater than the

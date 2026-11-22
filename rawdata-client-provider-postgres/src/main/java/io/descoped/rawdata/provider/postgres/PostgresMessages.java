@@ -1,5 +1,6 @@
 package io.descoped.rawdata.provider.postgres;
 
+import io.descoped.rawdata.api.RawdataException;
 import io.descoped.rawdata.api.RawdataMessage;
 
 import java.sql.Connection;
@@ -7,7 +8,11 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -18,16 +23,17 @@ final class PostgresMessages {
 
     private static final String COLUMNS = "SELECT m.id, m.position, m.ordering_group, m.sequence_number, c.name, c.data FROM (";
     private static final String CONTENT = ") m LEFT JOIN rawdata_content c ON c.topic = ? AND c.id = m.id ";
+    private static final String IN_ORDER = "ORDER BY m.id, c.ordinal";
 
     /**
      * The messages after (or from) an id, in order.
      */
     static final String AFTER_SQL = COLUMNS
             + "SELECT id, position, ordering_group, sequence_number FROM rawdata_message WHERE topic = ? AND id > ? ORDER BY id LIMIT ?"
-            + CONTENT + "ORDER BY m.id, c.ordinal";
+            + CONTENT + IN_ORDER;
     static final String FROM_SQL = COLUMNS
             + "SELECT id, position, ordering_group, sequence_number FROM rawdata_message WHERE topic = ? AND id >= ? ORDER BY id LIMIT ?"
-            + CONTENT + "ORDER BY m.id, c.ordinal";
+            + CONTENT + IN_ORDER;
     /**
      * The message with the greatest id.
      */
@@ -35,7 +41,61 @@ final class PostgresMessages {
             + "SELECT id, position, ordering_group, sequence_number FROM rawdata_message WHERE topic = ? ORDER BY id DESC LIMIT 1"
             + CONTENT + "ORDER BY c.ordinal";
 
+    /**
+     * The messages with the given ids.
+     */
+    static final String WITH_IDS_SQL = COLUMNS
+            + "SELECT id, position, ordering_group, sequence_number FROM rawdata_message WHERE topic = ? AND id = ANY (?)"
+            + CONTENT + IN_ORDER;
+
     private PostgresMessages() {
+    }
+
+    /**
+     * Leaves out the messages that are already stored: a message whose id is in the topic with the same position,
+     * ordering group, sequence number and content (in the same order) was written before, so writing it again is a
+     * no-op, and a message repeated within the batch is written once. A different message under an id already taken
+     * is refused.
+     *
+     * @return the messages still to write, in the batch's order
+     * @throws RawdataException naming the topic and the id, if a message differs from the one stored under its id
+     */
+    static List<RawdataMessage> notStored(Connection connection, String topic, List<RawdataMessage> messages) throws SQLException {
+        Map<UUID, RawdataMessage> fresh = new LinkedHashMap<>();
+        for (RawdataMessage m : messages) {
+            RawdataMessage earlier = fresh.putIfAbsent(m.id(), m);
+            if (earlier != null && !same(earlier, m)) {
+                throw new RawdataException("Two different messages with id " + m.id() + " in one publish to topic " + topic);
+            }
+        }
+        try (PreparedStatement select = connection.prepareStatement(WITH_IDS_SQL)) {
+            select.setString(1, topic);
+            select.setArray(2, connection.createArrayOf("uuid", fresh.keySet().toArray()));
+            select.setString(3, topic);
+            for (RawdataMessage stored : read(select)) {
+                if (!same(stored, fresh.remove(stored.id()))) {
+                    throw new RawdataException("Id " + stored.id() + " is already in topic " + topic + " with another message");
+                }
+            }
+        }
+        return new ArrayList<>(fresh.values());
+    }
+
+    /**
+     * The same message: content keys compared in order, as their ordinal is stored, so not {@code equals}, which
+     * compares them as a set.
+     */
+    private static boolean same(RawdataMessage a, RawdataMessage b) {
+        if (!a.position().equals(b.position()) || !Objects.equals(a.orderingGroup(), b.orderingGroup())
+                || a.sequenceNumber() != b.sequenceNumber() || !List.copyOf(a.keys()).equals(List.copyOf(b.keys()))) {
+            return false;
+        }
+        for (String key : a.keys()) {
+            if (!Arrays.equals(a.get(key), b.get(key))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     static List<RawdataMessage> after(Connection connection, String topic, UUID id, boolean inclusive, int limit) throws SQLException {

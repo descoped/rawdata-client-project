@@ -8,6 +8,7 @@ import io.descoped.rawdata.api.spi.OrderedRawdataProducer;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -18,6 +19,11 @@ import java.util.concurrent.locks.ReentrantLock;
  * id and gives new ids after it; given ids are stored as they are, in any order. Only one process writes a topic: if
  * the greatest id is not the greatest this client wrote (after its first publish to the topic), another process
  * wrote, and the publish fails with {@link RawdataWriterConflictException}, writing nothing.
+ * <p>
+ * Publishing a message again is a no-op: a message whose id is already stored, with the same position, ordering
+ * fields and content, is not written twice (a writer that recovers repeats its last publish). A different message
+ * under a stored id is refused with {@link io.descoped.rawdata.api.RawdataException}, and nothing of the call is
+ * written. A message repeated is already at or below the topic's greatest id, so the one-writer check is not changed.
  */
 final class PostgresRawdataProducer extends OrderedRawdataProducer {
 
@@ -31,6 +37,7 @@ final class PostgresRawdataProducer extends OrderedRawdataProducer {
     @Override
     protected void write(RawdataMessage[] batch) {
         String topic = topic();
+        boolean given = Arrays.stream(batch).anyMatch(message -> message.id() != null);
         ReentrantLock lock = client.publishLock(topic);
         lock.lock();
         try {
@@ -43,7 +50,8 @@ final class PostgresRawdataProducer extends OrderedRawdataProducer {
                     throw new RawdataWriterConflictException(topic); // another process published since; rolled back
                 }
                 List<RawdataMessage> messages = withIds(batch, last);
-                PostgresMessages.insert(connection, topic, messages);
+                // only a given id can be stored already: generated ones follow the topic's greatest id
+                PostgresMessages.insert(connection, topic, given ? PostgresMessages.notStored(connection, topic, messages) : messages);
                 return greatest(last, messages);
             });
             client.written(topic, wrote);

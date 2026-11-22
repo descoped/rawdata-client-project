@@ -427,8 +427,8 @@ what the target has. Typical causes:
   copied; copy without `--metadata`, or shorten the keys in the source.
 - Messages copied twice into a `filesystem`, `gcs` or `s3` target: after a crash of a run, the next run reads the
   target's end before its first publish, and that publish first uploads the windows the crashed run left behind, so
-  the messages in them are copied again. Ids are not checked for duplicates, as in 2.x. A `postgres` target refuses
-  the duplicate ids with `RawdataException`; run again, and it starts after them.
+  the messages in them are copied again. Those providers do not check ids for duplicates, as in 2.x. A `postgres`
+  target takes a message it already holds as written, so a run that copies it again is safe.
 
 **Exit 1, `interrupted; run again to continue`.** The thread was interrupted while it waited for the source.
 

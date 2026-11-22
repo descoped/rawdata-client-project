@@ -64,7 +64,8 @@ Ids, as in 2.x:
   goes back.
 - An id you give is kept as it is, in any order: it may be lower than ids already in the topic, and lower than the
   one before it in the same call. Ids must be unique; keeping them so is the caller's job (`memory` replaces a
-  message with the same id, `postgres` refuses it, the Avro providers store both).
+  message with the same id; `postgres` takes the same message again as already written and refuses a different one;
+  the Avro providers store both).
 - A topic whose ids were published in increasing order is read in that order. A lower id published later is read
   where the provider puts it: in id order in `memory` and `postgres`, after what was published before it in
   `filesystem`, `gcs` and `s3`.

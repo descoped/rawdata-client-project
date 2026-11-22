@@ -427,8 +427,11 @@ what the target has. Typical causes:
   copied; copy without `--metadata`, or shorten the keys in the source.
 - Messages copied twice into a `filesystem`, `gcs` or `s3` target: after a crash of a run, the next run reads the
   target's end before its first publish, and that publish first uploads the windows the crashed run left behind, so
-  the messages in them are copied again. Those providers do not check ids for duplicates, as in 2.x. A `postgres`
-  target takes a message it already holds as written, so a run that copies it again is safe.
+  the messages in them are copied again. Those providers do not check ids for duplicates, as in 2.x. (A `postgres`
+  target takes a message it already holds as written, so copying it again does no harm there.)
+- `RawdataException` from a `postgres` target, "is already in topic ... with another message": the source holds two
+  different messages under one id, which a `filesystem`, `gcs` or `s3` topic can, and `postgres` refuses the second.
+  Give the source's messages unique ids, or copy into a provider that keeps both.
 
 **Exit 1, `interrupted; run again to continue`.** The thread was interrupted while it waited for the source.
 

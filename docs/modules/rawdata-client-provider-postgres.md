@@ -421,6 +421,7 @@ to the original exception as suppressed, never in its place.
 | `RawdataException` from `create` mentioning `permission denied` | the tables are missing and the role may not create them | create the tables once with a role that may, then grant the role `SELECT, INSERT, UPDATE, DELETE` (see [privileges](#database-setup-and-privileges)) |
 | `RawdataWriterConflictException` from `publish` | another process wrote the topic since this client last did | see below |
 | `RawdataException` from `publish`: "is already in topic ... with another message" | a message's given id is in the topic with another position, ordering or content | give no id, or unique ids |
+| `RawdataException` from `publish`: "Two different messages with id ... in one publish" | one call holds two different messages with the same given id | give each message its own id |
 | `IllegalArgumentException` from a metadata call: "at most 2000 bytes in UTF-8 in postgres" | the key is too long | use a shorter key |
 | `RawdataException` after about 30 seconds, mentioning a connection timeout | all `max-pool-size` connections were busy | raise `max-pool-size`, or use fewer concurrent consumers per client |
 | A consumer sees new messages late | it polls every `prefetch-poll-interval-when-empty` ms | lower the interval |

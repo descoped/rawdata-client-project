@@ -23,16 +23,17 @@ final class PostgresMessages {
 
     private static final String COLUMNS = "SELECT m.id, m.position, m.ordering_group, m.sequence_number, c.name, c.data FROM (";
     private static final String CONTENT = ") m LEFT JOIN rawdata_content c ON c.topic = ? AND c.id = m.id ";
+    private static final String IN_ORDER = "ORDER BY m.id, c.ordinal";
 
     /**
      * The messages after (or from) an id, in order.
      */
     static final String AFTER_SQL = COLUMNS
             + "SELECT id, position, ordering_group, sequence_number FROM rawdata_message WHERE topic = ? AND id > ? ORDER BY id LIMIT ?"
-            + CONTENT + "ORDER BY m.id, c.ordinal";
+            + CONTENT + IN_ORDER;
     static final String FROM_SQL = COLUMNS
             + "SELECT id, position, ordering_group, sequence_number FROM rawdata_message WHERE topic = ? AND id >= ? ORDER BY id LIMIT ?"
-            + CONTENT + "ORDER BY m.id, c.ordinal";
+            + CONTENT + IN_ORDER;
     /**
      * The message with the greatest id.
      */
@@ -45,7 +46,7 @@ final class PostgresMessages {
      */
     static final String WITH_IDS_SQL = COLUMNS
             + "SELECT id, position, ordering_group, sequence_number FROM rawdata_message WHERE topic = ? AND id = ANY (?)"
-            + CONTENT + "ORDER BY m.id, c.ordinal";
+            + CONTENT + IN_ORDER;
 
     private PostgresMessages() {
     }
@@ -80,6 +81,10 @@ final class PostgresMessages {
         return new ArrayList<>(fresh.values());
     }
 
+    /**
+     * The same message: content keys compared in order, as their ordinal is stored, so not {@code equals}, which
+     * compares them as a set.
+     */
     private static boolean same(RawdataMessage a, RawdataMessage b) {
         if (!a.position().equals(b.position()) || !Objects.equals(a.orderingGroup(), b.orderingGroup())
                 || a.sequenceNumber() != b.sequenceNumber() || !List.copyOf(a.keys()).equals(List.copyOf(b.keys()))) {

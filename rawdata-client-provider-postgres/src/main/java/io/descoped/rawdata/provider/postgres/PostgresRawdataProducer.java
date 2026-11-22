@@ -8,6 +8,7 @@ import io.descoped.rawdata.api.spi.OrderedRawdataProducer;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -36,6 +37,7 @@ final class PostgresRawdataProducer extends OrderedRawdataProducer {
     @Override
     protected void write(RawdataMessage[] batch) {
         String topic = topic();
+        boolean given = Arrays.stream(batch).anyMatch(message -> message.id() != null);
         ReentrantLock lock = client.publishLock(topic);
         lock.lock();
         try {
@@ -48,7 +50,8 @@ final class PostgresRawdataProducer extends OrderedRawdataProducer {
                     throw new RawdataWriterConflictException(topic); // another process published since; rolled back
                 }
                 List<RawdataMessage> messages = withIds(batch, last);
-                PostgresMessages.insert(connection, topic, PostgresMessages.notStored(connection, topic, messages));
+                // only a given id can be stored already: generated ones follow the topic's greatest id
+                PostgresMessages.insert(connection, topic, given ? PostgresMessages.notStored(connection, topic, messages) : messages);
                 return greatest(last, messages);
             });
             client.written(topic, wrote);

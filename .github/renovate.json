@@ -24,7 +24,7 @@
       "enabled": false
     },
     {
-      "description": "Maven bumps through the wrapper: Renovate does not update distributionSha256Sum, so CI fails until it is set by hand (see .claude/CLAUDE.md, Maven Wrapper)",
+      "description": "Maven bumps through the wrapper: Renovate does not update distributionSha256Sum, so CI fails until it is set by hand (see CONTRIBUTING.md)",
       "matchManagers": [
         "maven-wrapper"
       ],
@@ -43,17 +43,14 @@
       "automerge": true
     },
     {
-      "description": "A new PostgreSQL major is a decision (the provider supports one version): a pull request, never automerged",
+      "description": "PostgreSQL 18 only (owner, 2026-11-23: 19 is not ready for production): 18.x updates, never a new major",
       "matchDatasources": [
         "docker"
       ],
       "matchDepNames": [
         "postgres"
       ],
-      "matchUpdateTypes": [
-        "major"
-      ],
-      "automerge": false
+      "allowedVersions": "/^18(\\.|-|$)/"
     }
   ],
   "vulnerabilityAlerts": {

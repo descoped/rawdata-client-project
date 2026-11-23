@@ -88,6 +88,23 @@
         <tag>HEAD</tag>
     </scm>
 
+    <!-- SNAPSHOTs of other Descoped modules, read from maven.descoped.io during development. Releases come from Maven
+         Central, Maven's default; a release has no SNAPSHOT dependency (the release plugin refuses one). The id is not
+         descoped-snapshots: that server holds the publishing token, which must never go to this URL. Publishing is
+         configured by the profile descoped-snapshots and a settings.xml profile, not here. -->
+    <repositories>
+        <repository>
+            <id>descoped-snapshots-public</id>
+            <url>https://maven.descoped.io/</url>
+            <releases>
+                <enabled>false</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+
     <profiles>
         <!-- Releases to Maven Central through the Central Portal, by central-publishing-maven-plugin. Only releases:
              the enforcer fails a SNAPSHOT version before anything is uploaded. SNAPSHOTs go to maven.descoped.io

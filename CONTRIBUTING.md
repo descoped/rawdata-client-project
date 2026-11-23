@@ -82,7 +82,9 @@ suites, coverage (`-P coverage`) and the IDE setup.
   `dependencyConvergence` fails the build otherwise. When two libraries bring different versions, declare the newest
   once, in the module that first needs it, and exclude it from the others.
 - **Versions are properties in the root POM**, not `dependencyManagement`. The BOM manages the rawdata modules only.
-- **No SNAPSHOT dependencies.** Modules depend on each other with `${project.version}`.
+- **SNAPSHOT dependencies only from maven.descoped.io, and never in a release.** A SNAPSHOT of another Descoped
+  module may be used during development; the release plugin refuses a release that still has one. Modules depend on
+  each other with `${project.version}`.
 - **The JDK first.** Ask whether the JDK or a library already in the tree does the job before you add one.
 - When Maven is bumped, set `distributionSha256Sum` in `.mvn/wrapper/maven-wrapper.properties` to the SHA-256 of
   the new `apache-maven-<version>-bin.zip`, after checking that zip against the `.sha512` Maven publishes next to it.

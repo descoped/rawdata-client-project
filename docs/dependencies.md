@@ -12,7 +12,8 @@ rules, and how the build keeps them.
 3. **Versions are properties in the root POM** (`slf4j.version`, `jackson.version`, …), not `dependencyManagement`.
    The BOM (`rawdata-client-bom`) manages the rawdata modules only.
 4. **Few dependencies.** The JDK first: `gcs` talks to GCS on `java.net.http` instead of Google's client libraries.
-5. **No SNAPSHOT dependencies**, and modules depend on each other with `${project.version}`.
+5. **SNAPSHOT dependencies only from maven.descoped.io**, the root POM's only declared repository, and never in a
+   release. Modules depend on each other with `${project.version}`.
 
 ## How the build keeps them
 

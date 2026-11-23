@@ -87,14 +87,17 @@ this repository.
   pull request or a tag. The AWS account and the publishing endpoint are in no file of this repository: the POM reads
   `${descoped.snapshots.url}` from a `settings.xml` profile, and CI takes the role from the organization secret
   `CODEARTIFACT_SNAPSHOTS_ROLE_ARN` and looks the endpoint up. That profile has no release repository and its enforcer
-  refuses a release version; without a profile, `deploy` has no repository. CI publishes nothing to Central. Maven
-  3.10 sends a server's credentials only to the hosts it knows for that id, and the id `central` is bound to Maven
-  Central, so the server `central` in `~/.m2/settings.xml` must list `https://central.sonatype.com` in
-  `repositoryOrigins`. `rawdata-copy-util` is a program, excluded from the Central bundle (`excludeArtifacts`); its
-  zip goes on the GitHub release (owner's decision, 2026-11-18). Release tags are `v<version>` (`v3.0.0`). After the
-  release is published on Central, the owner runs `release.yml` (`gh workflow run release.yml -f version=<version>`):
-  it checks the version is on Central, builds the copy tool from the tag and publishes the GitHub release with the
-  CHANGELOG section as notes (owner's decision, 2026-11-19).
+  refuses a release version; without a profile, `deploy` has no repository. CI publishes nothing to Central. For
+  reading, the root POM declares one repository, `descoped-snapshots-public` (`https://maven.descoped.io/`, SNAPSHOTs
+  only), for SNAPSHOTs of other Descoped modules during development; Maven Central stays Maven's default, and a
+  release has no SNAPSHOT dependency (owner's decision, 2026-11-23). Maven 3.10 sends a server's credentials only to
+  the hosts it knows for that id, and the id `central` is bound to Maven Central, so the server `central` in
+  `~/.m2/settings.xml` must list `https://central.sonatype.com` in `repositoryOrigins`. `rawdata-copy-util` is a
+  program, excluded from the Central bundle (`excludeArtifacts`); its zip goes on the GitHub release (owner's
+  decision, 2026-11-18). Release tags are `v<version>` (`v3.0.0`). After the release is published on Central, the
+  owner runs `release.yml` (`gh workflow run release.yml -f version=<version>`): it checks the version is on Central,
+  builds the copy tool from the tag and publishes the GitHub release with the CHANGELOG section as notes (owner's
+  decision, 2026-11-19).
 - **SonarCloud**: one project, `descoped_rawdata-client-project`, for the whole reactor.
 
 ## Testing

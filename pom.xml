@@ -196,6 +196,8 @@
                                         <requireProperty>
                                             <property>descoped.snapshots.url</property>
                                             <message>descoped.snapshots.url is not set: define it in a settings.xml profile (CI writes one).</message>
+                                            <regex>https://\S+/</regex>
+                                            <regexMessage>descoped.snapshots.url must be an https URL ending in /, not empty or an unexpanded ${env...}.</regexMessage>
                                         </requireProperty>
                                     </rules>
                                 </configuration>

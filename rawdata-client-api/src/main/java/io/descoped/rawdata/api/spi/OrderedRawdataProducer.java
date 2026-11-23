@@ -81,7 +81,8 @@ public abstract class OrderedRawdataProducer implements RawdataProducer {
 
     /**
      * Gives the messages without an id an id after the greatest id so far, starting after the topic's greatest id. A
-     * given id is kept as it is, in any order: it may be lower than ids already in the topic.
+     * given id is kept as it is, in any order: it may be lower than ids already in the topic. A message with a given
+     * id is returned as the same instance, so a provider may key work done before the call by identity.
      *
      * @param batch the messages
      * @param last  the topic's greatest id, or {@link RawdataIds#beginningOfTime()} for an empty topic

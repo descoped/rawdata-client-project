@@ -52,8 +52,9 @@ import java.util.stream.Stream;
  * windows are set aside ({@code .invalid}, never deleted) and every later publish fails.
  * <p>
  * <b>Unique ids.</b> A given id at or below the topic's greatest id is looked up before the call is written: in the
- * open window and the windows waiting for upload (a digest per message, dropped once uploaded) and in the uploaded
- * segments ({@link AvroTakenIds}). The same message again is left out; a different one is refused.
+ * open window and the windows waiting for upload, and in the uploaded segments ({@link AvroTakenIds}). The windows
+ * keep their ids until uploaded, with a digest only for a message given with its id; a generated id has none, as no
+ * one can repeat it before it is seen. The same message again is left out; a different one is refused.
  * <p>
  * <b>Failures.</b> An upload that fails after the store's retries fails the writer: every later publish, flush and
  * close throws, and the sealed windows stay on disk.
@@ -75,6 +76,11 @@ final class AvroTopicWriter {
     private static final String OF_TOPIC = " of topic ";
     private static final String CLOSING = "Closing the upload window" + OF_TOPIC;
     private static final String FAILED = " failed";
+    /**
+     * The digest kept for a generated id: none. A generated id is seen by no one before its segment is uploaded, so
+     * a message given that id meanwhile is another message; it compares unequal to every digest.
+     */
+    private static final byte[] NOT_SEEN = new byte[0];
 
     private final AvroRawdataClient client;
     private final AvroStore store;
@@ -112,7 +118,7 @@ final class AvroTopicWriter {
         long previousBlockStart; // where the block before it starts
         boolean torn; // a write failed in the middle of a call: only the forced blocks may be kept
         ScheduledFuture<?> timer;
-        final Map<UUID, byte[]> digests = new HashMap<>(); // the window's messages by id, for the unique-id check
+        final Map<UUID, byte[]> digests = new HashMap<>(); // the window's ids, for the unique-id check (see NOT_SEEN)
 
         Window(Path file, long segment, UUID previousId, FileOutputStream out, DataFileWriter<GenericRecord> writer) {
             this.file = file;
@@ -194,8 +200,9 @@ final class AvroTopicWriter {
      * block is full, so blocks hold whole calls.
      *
      * @param withIds gives the messages without an id an id after the given greatest id
+     * @param given   the digests of the messages given with an id, by identity, computed before the lock
      */
-    void publish(Function<UUID, List<RawdataMessage>> withIds) {
+    void publish(Function<UUID, List<RawdataMessage>> withIds, Map<RawdataMessage, byte[]> given) {
         appendLock.lock();
         try {
             throwIfFailed();
@@ -206,12 +213,12 @@ final class AvroTopicWriter {
                 openWindow();
             }
             Window window = current;
-            List<RawdataMessage> stored = notTaken(withIds.apply(window.lastId), window);
+            List<RawdataMessage> stored = notTaken(withIds.apply(window.lastId), given, window);
             append(window, stored);
             for (RawdataMessage message : stored) {
                 window.firstId = window.firstId == null ? message.id() : AvroSegments.lowest(window.firstId, message.id());
                 window.lastId = AvroSegments.greatest(window.lastId, message.id());
-                window.digests.put(message.id(), AvroTakenIds.digest(message));
+                window.digests.put(message.id(), given.getOrDefault(message, NOT_SEEN));
             }
             window.count += stored.size();
             if (window.blockBytes >= settings.syncInterval()) {
@@ -235,7 +242,7 @@ final class AvroTopicWriter {
      *
      * @throws RawdataDuplicateIdException if a message differs from the one under its id
      */
-    private List<RawdataMessage> notTaken(List<RawdataMessage> messages, Window window) {
+    private List<RawdataMessage> notTaken(List<RawdataMessage> messages, Map<RawdataMessage, byte[]> given, Window window) {
         Map<UUID, RawdataMessage> fresh = RawdataDuplicates.distinct(topic, messages);
         Iterator<RawdataMessage> each = fresh.values().iterator();
         while (each.hasNext()) {
@@ -245,7 +252,7 @@ final class AvroTopicWriter {
             }
             Optional<byte[]> taken = takenDigest(message.id(), window);
             if (taken.isPresent()) {
-                if (!Arrays.equals(taken.get(), AvroTakenIds.digest(message))) {
+                if (!Arrays.equals(taken.get(), given.get(message))) { // only a given id can be at or below the greatest
                     throw new RawdataDuplicateIdException(topic, message.id());
                 }
                 each.remove(); // written before
@@ -255,24 +262,26 @@ final class AvroTopicWriter {
     }
 
     /**
-     * The digest of the message under an id in the topic, if it is taken. A window is in {@code pending} until its segment is
-     * uploaded, so a window that uploads meanwhile is found in one or the other.
+     * The digest of the message under an id in the topic, if it is taken. A window is in {@code pending} until its
+     * segment is uploaded, so a window that uploads meanwhile is found in one or the other. A generated id in a
+     * waiting window may already be seen if its segment was uploaded just now: then the segment's digest counts.
      */
     private Optional<byte[]> takenDigest(UUID id, Window window) {
         byte[] digest = window.digests.get(id);
         if (digest != null) {
-            return Optional.of(digest);
+            return Optional.of(digest); // the open window is never seen
         }
-        List<Map<UUID, byte[]>> waiting = new ArrayList<>();
+        List<Sealed> waiting;
         long uploaded;
         synchronized (this) {
-            for (Sealed sealed : pending) {
-                waiting.add(sealed.digests());
-            }
+            waiting = new ArrayList<>(pending);
             uploaded = uploadedThrough;
         }
-        for (Map<UUID, byte[]> digests : waiting) {
-            digest = digests.get(id);
+        for (Sealed sealed : waiting) {
+            digest = sealed.digests().get(id);
+            if (digest == NOT_SEEN) {
+                return Optional.of(takenIds.findIn(sealed.segment(), id).orElse(NOT_SEEN));
+            }
             if (digest != null) {
                 return Optional.of(digest);
             }

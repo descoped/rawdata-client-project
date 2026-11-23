@@ -1,5 +1,6 @@
 package io.descoped.rawdata.provider.avro;
 
+import io.descoped.rawdata.api.RawdataDuplicateIdException;
 import io.descoped.rawdata.api.RawdataException;
 import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.RawdataProducer;
@@ -49,6 +50,7 @@ class AvroTopicWriterTest {
         final CountDownLatch uploading = new CountDownLatch(1);
         volatile Outcome outcome = Outcome.CREATE;
         volatile boolean gated;
+        volatile boolean gatedAfterCreate; // the segment is stored, the upload not yet done
 
         @Override
         public boolean create(String topic, long segment, byte[] content) throws IOException {
@@ -68,7 +70,19 @@ class AvroTopicWriterTest {
                     return false;
                 default:
                     byte[] stored = segments.putIfAbsent(topic + "/" + segment, content.clone());
+                    if (gatedAfterCreate) {
+                        await(release);
+                    }
                     return stored == null || Arrays.equals(stored, content);
+            }
+        }
+
+        private static void await(CountDownLatch latch) throws IOException {
+            try {
+                latch.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException(e);
             }
         }
 
@@ -133,6 +147,31 @@ class AvroTopicWriterTest {
     private List<String> files() throws IOException {
         try (Stream<Path> files = Files.list(folder.resolve("t"))) {
             return files.map(file -> file.getFileName().toString()).filter(name -> !name.equals(".lock")).sorted().toList();
+        }
+    }
+
+    /**
+     * A message with a generated id is seen once its segment is stored, while the writer still counts the window as
+     * waiting for upload. Published again then, it is a no-op; a different message under its id is refused.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void aGeneratedIdSeenWhileItsUploadFinishesIsComparedWithTheStoredMessage() throws Exception {
+        GatedStore store = new GatedStore();
+        store.gatedAfterCreate = true;
+        try (AvroRawdataClient client = client(store, 4000, 4)) {
+            RawdataProducer producer = client.producer("t");
+            producer.publish(message("large", 5000)); // over the size: sealed, uploaded, the upload not yet done
+            assertTrue(store.uploading.await(10, TimeUnit.SECONDS));
+            RawdataMessage seen = client.lastMessage("t");
+            assertEquals("large", seen.position());
+            producer.publish(seen);
+            RawdataMessage other = RawdataMessage.builder().id(seen.id()).position("other").build();
+            assertThrows(RawdataDuplicateIdException.class, () -> producer.publish(other));
+            store.release.countDown();
+            client.flush("t");
+            assertEquals(1, store.segments.size(), "nothing more was written");
         }
     }
 

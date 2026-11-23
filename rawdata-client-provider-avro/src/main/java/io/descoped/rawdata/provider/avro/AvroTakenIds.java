@@ -76,13 +76,32 @@ final class AvroTakenIds {
         return summaries.computeIfAbsent(segment, s -> client.summaryOf(topic, s));
     }
 
+    /**
+     * The digest of the message under an id in one segment, if the segment is uploaded and holds it.
+     *
+     * @param segment the segment
+     * @param id      the id
+     * @return the digest, or empty if the segment does not exist yet or does not hold the id
+     */
+    Optional<byte[]> findIn(long segment, UUID id) {
+        Map<UUID, byte[]> kept = ids.get(segment);
+        if (kept == null) {
+            AvroSegmentReader reader = client.reader(topic, segment);
+            if (reader == null) {
+                return Optional.empty();
+            }
+            kept = read(reader, segment);
+        }
+        return Optional.ofNullable(kept.get(id));
+    }
+
     private Map<UUID, byte[]> idsOf(long segment) {
         Map<UUID, byte[]> kept = ids.get(segment);
-        if (kept != null) {
-            return kept;
-        }
+        return kept != null ? kept : read(client.existing(topic, segment), segment);
+    }
+
+    private Map<UUID, byte[]> read(AvroSegmentReader reader, long segment) {
         Map<UUID, byte[]> read = new HashMap<>();
-        AvroSegmentReader reader = client.existing(topic, segment);
         RawdataMessage message;
         while ((message = client.next(reader, topic, segment)) != null) {
             read.putIfAbsent(message.id(), digest(message)); // the first, if a topic from before 3.1.0 has it twice

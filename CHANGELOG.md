@@ -15,6 +15,9 @@
   a generated id is not hashed, as no one can repeat it before its segment is uploaded. The windows not yet uploaded
   keep their ids in memory until then.
 - `io.descoped.rawdata.api.spi.RawdataDuplicates`: the rule for providers, `same` and `distinct`.
+- The parent POM declares one repository, `https://maven.descoped.io/` (id `descoped-snapshots-public`), for
+  SNAPSHOTs only. A build that uses rawdata also looks there for SNAPSHOT versions; releases come only from Maven
+  Central.
 
 ## 3.0.1
 

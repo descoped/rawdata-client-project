@@ -135,21 +135,24 @@ jobs:
       - id: aws
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
         with:
-          role-to-assume: arn:aws:iam::764178632479:role/codeartifact-maven-snapshots-publisher
+          role-to-assume: ${{ secrets.CODEARTIFACT_PUBLISHER_ROLE_ARN }}
           aws-region: eu-north-1
           role-duration-seconds: 900
           output-credentials: true
           output-env-credentials: false
 
-      # The CodeArtifact token lives 15 minutes and only in this step's shell; settings.xml reads it from there.
+      # The CodeArtifact token lives 15 minutes and only in this step's shell; settings.xml reads it from there. The
+      # account and the publishing endpoint come from secrets, so they are in no public file and masked in the log.
       - name: Deploy
         env:
+          DOMAIN_OWNER: ${{ secrets.CODEARTIFACT_DOMAIN_OWNER }}
+          SNAPSHOTS_URL: ${{ secrets.CODEARTIFACT_MAVEN_SNAPSHOTS_URL }}
           AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
           AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
           AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
           AWS_REGION: eu-north-1
         run: |
-          token=$(aws codeartifact get-authorization-token --domain descoped --domain-owner 764178632479 \
+          token=$(aws codeartifact get-authorization-token --domain descoped --domain-owner "$DOMAIN_OWNER" \
             --duration-seconds 900 --query authorizationToken --output text)
           echo "::add-mask::$token"
           export CODEARTIFACT_AUTH_TOKEN="$token"
@@ -163,6 +166,17 @@ jobs:
                 <password>${env.CODEARTIFACT_AUTH_TOKEN}</password>
               </server>
             </servers>
+            <profiles>
+              <profile>
+                <id>descoped-codeartifact</id>
+                <properties>
+                  <descoped.snapshots.url>${env.SNAPSHOTS_URL}</descoped.snapshots.url>
+                </properties>
+              </profile>
+            </profiles>
+            <activeProfiles>
+              <activeProfile>descoped-codeartifact</activeProfile>
+            </activeProfiles>
           </settings>
           XML
           ./mvnw --batch-mode --no-transfer-progress -P descoped-snapshots -DskipTests deploy

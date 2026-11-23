@@ -191,4 +191,4 @@ jobs:
           </settings>
           XML
           ./mvnw --batch-mode --no-transfer-progress -P descoped-snapshots -Dmaven.repository.credentialScope=strict \
-            -DskipTests deploy
+            -DskipTests -DskipITs deploy

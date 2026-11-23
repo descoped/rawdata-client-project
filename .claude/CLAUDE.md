@@ -165,7 +165,7 @@ this repository.
 ## Commands
 
 ```sh
-./mvnw verify                    # compile with -Xlint:all -Werror, tests
+./mvnw -T 1C verify              # compile with -Xlint:all -Werror, tests; modules in parallel, as CI
 ./mvnw verify javadoc:javadoc    # plus Javadoc with doclint, warnings fail the build
 ./mvnw verify -P coverage        # JaCoCo report per module in <module>/target/site/jacoco
 src/it/jpms/run.sh               # JPMS smoke test (Docker)

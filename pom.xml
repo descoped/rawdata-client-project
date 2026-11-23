@@ -109,7 +109,7 @@
     <profiles>
         <!-- Releases to Maven Central through the Central Portal, by central-publishing-maven-plugin. Only releases:
              the enforcer fails a SNAPSHOT version before anything is uploaded. SNAPSHOTs go to maven.descoped.io
-             only (profile descoped-snapshots).
+             only (published by CI).
              Release (Ove approves each one): ./mvnw release:prepare release:perform
              Server `central` in ~/.m2/settings.xml holds the Portal user token and, for Maven 3.10, lists
              https://central.sonatype.com in repositoryOrigins. Releases are uploaded with autoPublish=false and

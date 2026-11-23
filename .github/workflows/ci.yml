@@ -1,5 +1,6 @@
 name: CI
 
+# Maven builds modules in parallel (--threads 1C, a thread per core): the providers' tests run side by side.
 # One job on JDK 17, the baseline: every build compiles with `release 17`, so the bytecode does not depend on the
 # JDK, and 17 is the oldest runtime users have. Every run: build, tests and Javadoc of every module, and the JPMS
 # smoke test. Pushes to master and release tags, and pull requests from this repository, add coverage and
@@ -61,11 +62,11 @@ jobs:
 
       - name: Build, test and Javadoc
         if: env.ANALYSE != 'true'
-        run: ./mvnw --batch-mode --no-transfer-progress verify javadoc:javadoc
+        run: ./mvnw --batch-mode --no-transfer-progress --threads 1C verify javadoc:javadoc
 
       - name: Build, test, Javadoc and coverage
         if: env.ANALYSE == 'true'
-        run: ./mvnw --batch-mode --no-transfer-progress verify javadoc:javadoc -P coverage
+        run: ./mvnw --batch-mode --no-transfer-progress --threads 1C verify javadoc:javadoc -P coverage
 
       # The application view: a module that requires only the API finds every provider and uses filesystem,
       # PostgreSQL 18 and a fake GCS, on the module path and on the class path (Docker runs the stores).
@@ -165,4 +166,4 @@ jobs:
             </servers>
           </settings>
           XML
-          ./mvnw --batch-mode --no-transfer-progress -P descoped-snapshots -DskipTests deploy
+          ./mvnw --batch-mode --no-transfer-progress --threads 1C -P descoped-snapshots -DskipTests deploy

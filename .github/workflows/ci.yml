@@ -152,13 +152,15 @@ jobs:
           AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
           AWS_REGION: eu-north-1
         run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          echo "::add-mask::$account"
           token=$(aws codeartifact get-authorization-token --domain descoped \
             --duration-seconds 900 --query authorizationToken --output text)
           echo "::add-mask::$token"
           export CODEARTIFACT_AUTH_TOKEN="$token"
           url=$(aws codeartifact get-repository-endpoint --domain descoped --repository maven-snapshots \
             --format maven --query repositoryEndpoint --output text)
-          origin=$(printf '%s' "$url" | sed -E 's#^(https://[^/]+).*#\1#')
+          origin="${url%%/maven/*}"
           echo "::add-mask::$url"
           echo "::add-mask::$origin"
           export SNAPSHOTS_URL="$url" SNAPSHOTS_ORIGIN="$origin"

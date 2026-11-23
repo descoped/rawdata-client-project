@@ -21,7 +21,8 @@ If you want to copy topics from your own Java code instead, you do not need this
 
 The tool is a program, not a library. It is **not** published to Maven Central and **not** in `rawdata-client-bom`:
 the root POM leaves it out of the Central bundle. Each release gets a zip on its GitHub release page, built from
-the release tag by the `Release` workflow (see [Releasing](../releasing.md)). No SNAPSHOT builds are published anywhere.
+the release tag by the `Release` workflow (see [Releasing](../releasing.md)). Its SNAPSHOT jar is published to
+`https://maven.descoped.io/` with the other modules; the zip is made for releases only.
 
 The zip holds one folder:
 

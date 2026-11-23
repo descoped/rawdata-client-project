@@ -78,9 +78,14 @@ this repository.
   (milestones, RCs, alphas) only on request. Old and outdated code and configuration is removed, not carried along.
 - **Releases only with the owner's go-ahead.** A release (`release:prepare`/`release:perform`, an upload to the
   Central Portal) is made by the owner or on his explicit word.
-- **Publishing.** Only releases are published, by hand, through the Central Portal (profiles `central,sign`). **No
-  SNAPSHOTs** are published, by CI or by hand: the Portal's free tier limits monthly publishing (owner's decision,
-  2026-11-17). CI publishes nothing to Central. Maven 3.10 sends a server's credentials only to the hosts it knows for
+- **Publishing.** Releases are published only to Maven Central, by hand, through the Central Portal (profiles
+  `central,sign`). **No SNAPSHOT ever goes to Central**: the Portal limits monthly publishing (owner's decision,
+  2026-11-17), and the `central` profile's enforcer refuses a SNAPSHOT version. SNAPSHOTs go only to Descoped's AWS
+  CodeArtifact repository `maven-snapshots`, read publicly at `https://maven.descoped.io/`, for development across
+  repositories (owner's decision, 2026-11-23): CI's `snapshot` job deploys with the profile `descoped-snapshots`
+  after a green build, on a push to master and on a run by hand on a branch (version `X.Y.Z-<branch>-SNAPSHOT`),
+  never on a pull request or a tag. That profile has no release repository and its enforcer refuses a release
+  version; without a profile, `deploy` has no repository. CI publishes nothing to Central. Maven 3.10 sends a server's credentials only to the hosts it knows for
   that id, and the id `central` is bound to Maven Central, so the server `central` in `~/.m2/settings.xml` must list
   `https://central.sonatype.com` in `repositoryOrigins`. `rawdata-copy-util` is a program, excluded from the Central
   bundle (`excludeArtifacts`); its zip goes on the GitHub release (owner's decision, 2026-11-18). Release tags are

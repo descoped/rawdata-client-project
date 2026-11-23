@@ -90,7 +90,8 @@
 
     <profiles>
         <!-- Releases to Maven Central through the Central Portal, by central-publishing-maven-plugin. Only releases:
-             SNAPSHOTs are not published.
+             the enforcer fails a SNAPSHOT version before anything is uploaded. SNAPSHOTs go to maven.descoped.io
+             only (profile descoped-snapshots).
              Release (Ove approves each one): ./mvnw release:prepare release:perform
              Server `central` in ~/.m2/settings.xml holds the Portal user token and, for Maven 3.10, lists
              https://central.sonatype.com in repositoryOrigins. Releases are uploaded with autoPublish=false and
@@ -99,6 +100,25 @@
             <id>central</id>
             <build>
                 <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-enforcer-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>only-releases-to-central</id>
+                                <goals>
+                                    <goal>enforce</goal>
+                                </goals>
+                                <configuration>
+                                    <rules>
+                                        <requireReleaseVersion>
+                                            <message>Only releases go to Maven Central; SNAPSHOTs go to maven.descoped.io (-P descoped-snapshots).</message>
+                                        </requireReleaseVersion>
+                                    </rules>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-source-plugin</artifactId>
@@ -138,6 +158,43 @@
                                 <excludeArtifact>rawdata-copy-util</excludeArtifact>
                             </excludeArtifacts>
                         </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- SNAPSHOTs to Descoped's AWS CodeArtifact repository maven-snapshots, read publicly at
+             https://maven.descoped.io/, for development across repositories. Only SNAPSHOTs: the enforcer fails a
+             release version, and there is no release repository. CI deploys with it from master (see ci.yml):
+             ./mvnw -P descoped-snapshots deploy. Without a profile, deploy has no repository and fails. -->
+        <profile>
+            <id>descoped-snapshots</id>
+            <distributionManagement>
+                <snapshotRepository>
+                    <id>descoped-snapshots</id>
+                    <url>https://descoped-764178632479.d.codeartifact.eu-north-1.amazonaws.com/maven/maven-snapshots/</url>
+                </snapshotRepository>
+            </distributionManagement>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-enforcer-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>only-snapshots-to-descoped</id>
+                                <goals>
+                                    <goal>enforce</goal>
+                                </goals>
+                                <configuration>
+                                    <rules>
+                                        <requireSnapshotVersion>
+                                            <message>Only SNAPSHOTs go to maven.descoped.io; releases go to Maven Central (-P central,sign).</message>
+                                        </requireSnapshotVersion>
+                                    </rules>
+                                </configuration>
+                            </execution>
+                        </executions>
                     </plugin>
                 </plugins>
             </build>

@@ -4,7 +4,8 @@ name: CI
 # JDK, and 17 is the oldest runtime users have. Every run: build, tests and Javadoc of every module, and the JPMS
 # smoke test. Pushes to master and release tags, and pull requests from this repository, add coverage and
 # the SonarCloud analysis (not gating; pull requests from forks get no token). CI publishes nothing to Maven Central:
-# releases are signed and uploaded by hand (see docs/releasing.md), and SNAPSHOTs are not published.
+# releases are signed and uploaded by hand (see docs/releasing.md). After a green build, a push to master, or a run
+# by hand on a branch, publishes SNAPSHOTs to maven.descoped.io (job snapshot), never a release.
 on:
   push:
     branches: [master]
@@ -79,3 +80,66 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONARCLOUD_TOKEN }}
         run: ./mvnw --batch-mode --no-transfer-progress -P sonar org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
 
+  # SNAPSHOTs to Descoped's AWS CodeArtifact repository, read publicly at https://maven.descoped.io/, for development
+  # across repositories: on a push to master (X.Y.Z-SNAPSHOT) and on a run by hand (X.Y.Z-<branch>-SNAPSHOT on a
+  # branch other than master, so it never replaces master's). Never on a pull request or a tag. The role is taken
+  # through GitHub's OIDC token: no secret. The profile descoped-snapshots refuses a release version, and so does the
+  # guard below, before anything is uploaded.
+  snapshot:
+    name: Publish SNAPSHOTs
+    needs: build
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
+      || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880  # v6.3.0
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+          server-id: descoped-snapshots
+          server-username: CODEARTIFACT_USER
+          server-password: CODEARTIFACT_AUTH_TOKEN
+
+      - name: Branch version
+        if: github.ref != 'refs/heads/master'
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          version=$(./mvnw -q help:evaluate -Dexpression=project.version -DforceStdout)
+          name=$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9.' '-')
+          ./mvnw --batch-mode --no-transfer-progress versions:set -DgenerateBackupPoms=false \
+            -DnewVersion="${version%-SNAPSHOT}-${name}-SNAPSHOT"
+
+      - name: Only a SNAPSHOT
+        run: |
+          version=$(./mvnw -q help:evaluate -Dexpression=project.version -DforceStdout)
+          case "$version" in
+            *-SNAPSHOT) echo "Publishing $version" ;;
+            *) echo "Not a SNAPSHOT: $version"; exit 1 ;;
+          esac
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::764178632479:role/codeartifact-maven-snapshots-publisher
+          aws-region: eu-north-1
+
+      - name: CodeArtifact token
+        run: |
+          token=$(aws codeartifact get-authorization-token --domain descoped --domain-owner 764178632479 \
+            --region eu-north-1 --query authorizationToken --output text)
+          echo "::add-mask::$token"
+          echo "CODEARTIFACT_USER=aws" >> "$GITHUB_ENV"
+          echo "CODEARTIFACT_AUTH_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Deploy
+        run: ./mvnw --batch-mode --no-transfer-progress -P descoped-snapshots -DskipTests deploy

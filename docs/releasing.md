@@ -4,20 +4,18 @@ Releases are made **only by the owner, or on his explicit word**, and go only to
 to Central: the Portal limits monthly publishing, and the `central` profile refuses a SNAPSHOT version.
 
 SNAPSHOTs go only to Descoped's AWS CodeArtifact repository, read publicly at `https://maven.descoped.io/`, for
-development across repositories. CI's `snapshot` job publishes them after a green build, with the profile
-`descoped-snapshots`:
+development across repositories. CI's `snapshot` job publishes them after a green build:
 
 - a push to master publishes the current `X.Y.Z-SNAPSHOT`;
 - a run by hand on another branch (`gh workflow run ci.yml --ref <branch>`) publishes `X.Y.Z-<branch>-SNAPSHOT`, so
   it never replaces master's;
 - a pull request or a tag publishes nothing.
 
-The profile has no release repository, and its enforcer refuses a release version. Without a profile, `deploy` has no
-repository at all. The publishing endpoint is in no file of this repository: the profile reads it from the property
-`descoped.snapshots.url`, which a `settings.xml` profile defines, and the enforcer refuses a deploy without it. CI
-assumes the role from the organization secret `CODEARTIFACT_SNAPSHOTS_ROLE_ARN`, looks up the endpoint, and writes
-that `settings.xml`, with the credentials bound to the endpoint's origin; the account and the endpoint are masked in
-the log.
+The POM has no `<distributionManagement>`, so `deploy` without a target fails, and a release version can never go
+to maven.descoped.io. The job names the target on its command line (`-DaltSnapshotDeploymentRepository`, SNAPSHOTs
+only) and adds the sources. The publishing endpoint is in no file of this repository: CI assumes the role from the
+organization secret `CODEARTIFACT_SNAPSHOTS_ROLE_ARN`, looks up the endpoint, and writes a `settings.xml` with the
+token bound to the endpoint's origin; the account and the endpoint are masked in the log.
 
 A release is two things, in this order:
 

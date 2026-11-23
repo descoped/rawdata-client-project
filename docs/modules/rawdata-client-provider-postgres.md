@@ -254,12 +254,12 @@ producer generates grow in commit order, so a consumer never misses one of them:
 A given id is stored as it is, as in 2.x, and may be lower than ids already committed; a consumer already past it
 does not read it.
 
-Publishing a message again is a no-op. A writer that recovers, such as a saga that repeats its last step, may publish
-a message it already wrote, with the same id. If the message stored under that id has the same position, ordering
-group, sequence number and content (the same keys in the same order, the same bytes), it is not written again, and
-the rest of the call is written; a message repeated within one call is written once. A different message under an id
-already in the topic is refused with `RawdataException`, and nothing of the call is written. A repeated message is
-already at or below the topic's greatest id, so it does not change the one-writer check.
+An id is unique within a topic, as in every provider. When a call gives ids, the publish reads the messages already
+stored under them, in the same transaction. A message stored with the same position, ordering group, sequence number
+and content (the same keys in the same order, the same bytes) is left out, and the rest of the call is written. A
+different one is refused with `RawdataDuplicateIdException`, and nothing of the call is written. A repeated message is
+already at or below the topic's greatest id, so it does not change the one-writer check. A call without given ids
+skips the read.
 
 This depends on the read in step 3 seeing every commit made before the lock was granted. Under READ COMMITTED each
 statement takes a fresh snapshot, so it does. Under REPEATABLE READ the snapshot would be taken by the lock statement,
@@ -420,8 +420,7 @@ to the original exception as suppressed, never in its place.
 | `RawdataException: PostgreSQL: …` from `RawdataClient.create` | the server cannot be reached, the database does not exist, or the login failed | check host, port, database, user and password; the cause has pgjdbc's message |
 | `RawdataException` from `create` mentioning `permission denied` | the tables are missing and the role may not create them | create the tables once with a role that may, then grant the role `SELECT, INSERT, UPDATE, DELETE` (see [privileges](#database-setup-and-privileges)) |
 | `RawdataWriterConflictException` from `publish` | another process wrote the topic since this client last did | see below |
-| `RawdataException` from `publish`: "is already in topic ... with another message" | a message's given id is in the topic with another position, ordering or content | give no id, or unique ids |
-| `RawdataException` from `publish`: "Two different messages with id ... in one publish" | one call holds two different messages with the same given id | give each message its own id |
+| `RawdataDuplicateIdException` from `publish` | a given id is taken in the topic, or earlier in the call, by a message with another position, ordering or content | give no id, or unique ids |
 | `IllegalArgumentException` from a metadata call: "at most 2000 bytes in UTF-8 in postgres" | the key is too long | use a shorter key |
 | `RawdataException` after about 30 seconds, mentioning a connection timeout | all `max-pool-size` connections were busy | raise `max-pool-size`, or use fewer concurrent consumers per client |
 | A consumer sees new messages late | it polls every `prefetch-poll-interval-when-empty` ms | lower the interval |

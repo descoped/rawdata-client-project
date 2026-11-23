@@ -65,8 +65,10 @@ this repository.
   keys by the API. A store that does not exist fails with `RawdataException`, never reads as empty. Topic names are
   validated and never spliced into SQL, file paths or object names. One exception, by the owner's decision of
   2026-11-19 to follow 2.x: given ids are kept in any order, and where a lower id published later is read (id order
-  in memory and postgres, publish order in the Avro providers), what `lastMessage` returns and what a duplicate id does
-  depend on the provider. The TCK checks only what is common: every message of a completed topic is read once.
+  in memory and postgres, publish order in the Avro providers) and what `lastMessage` returns depend on the provider.
+  The TCK checks only what is common: every message of a completed topic is read once. An id is unique within a topic
+  in every provider (owner's decision, 2026-11-23): the same message again is a no-op, a different one is refused with
+  `RawdataDuplicateIdException`, and the TCK checks it.
 - **Ids are UUIDv7** (`RawdataIds`), laid out as PostgreSQL 18's `uuidv7()` (48-bit milliseconds, version 7, 12-bit
   sub-millisecond fraction, variant, 62 random bits) and ordered by `RawdataIds.ORDER` (unsigned, as PostgreSQL
   orders `uuid`), never by `UUID.compareTo`, which is signed. No ULID library (owner's decision, 2026-11-17).

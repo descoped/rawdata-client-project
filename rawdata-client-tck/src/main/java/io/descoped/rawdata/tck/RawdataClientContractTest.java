@@ -4,6 +4,7 @@ import io.descoped.rawdata.api.RawdataClient;
 import io.descoped.rawdata.api.RawdataClosedException;
 import io.descoped.rawdata.api.RawdataConsumer;
 import io.descoped.rawdata.api.RawdataCopy;
+import io.descoped.rawdata.api.RawdataDuplicateIdException;
 import io.descoped.rawdata.api.RawdataException;
 import io.descoped.rawdata.api.RawdataIds;
 import io.descoped.rawdata.api.RawdataMessage;
@@ -400,6 +401,85 @@ public abstract class RawdataClientContractTest {
             List<String> read = readAll(consumer);
             read.sort(null);
             assertEquals(List.of("a", "first", "lower", "second"), read);
+        }
+    }
+
+    /**
+     * An id is unique within a topic: publishing the same message again is a no-op, whether the first is still being
+     * written, already published, or published by a client before a restart, and also within one call; a consumer
+     * reads it once. A given id below the topic's greatest is checked as well.
+     *
+     * @throws InterruptedException if interrupted while waiting
+     */
+    @Test
+    public void publishingAMessageAgainWritesItOnce() throws InterruptedException {
+        publish("a");
+        RawdataMessage last = client.lastMessage(topic);
+        RawdataMessage ahead = RawdataMessage.builder().id(RawdataIds.next(last.id())).position("ahead")
+                .orderingGroup("group").sequenceNumber(7).put("k1", new byte[]{1, 2}).put("k2", new byte[]{3}).build();
+        RawdataMessage lower = RawdataMessage.builder().id(RawdataIds.beginningOf(last.timestamp() - 1)).position("lower")
+                .put("k", new byte[]{4}).build();
+        try (RawdataProducer producer = client.producer(topic)) {
+            producer.publish(ahead, lower);
+            producer.publish(ahead); // still being written
+            producer.publish(lower, lower, message("b"));
+        }
+        awaitPublished(client, topic);
+        try (RawdataProducer producer = client.producer(topic)) {
+            producer.publish(ahead, lower); // published
+        }
+        awaitPublished(client, topic);
+        if (clientsShareTheStore()) {
+            client.close();
+            client = RawdataClient.create(configuration());
+            try (RawdataProducer producer = client.producer(topic)) {
+                producer.publish(lower, ahead); // by a client before a restart
+            }
+            awaitPublished(client, topic);
+        }
+        try (RawdataConsumer consumer = client.consumer(topic)) {
+            List<String> read = readAll(consumer);
+            read.sort(null);
+            assertEquals(List.of("a", "ahead", "b", "lower"), read);
+        }
+    }
+
+    /**
+     * A different message under an id that is taken, in the topic or earlier in the same call, is refused with
+     * RawdataDuplicateIdException, and nothing of the call is written. A message with its content keys in another
+     * order is a different message.
+     *
+     * @throws InterruptedException if interrupted while waiting
+     */
+    @Test
+    public void aDifferentMessageUnderATakenIdIsRefused() throws InterruptedException {
+        publish("a");
+        UUID id = RawdataIds.next(client.lastMessage(topic).id());
+        RawdataMessage first = RawdataMessage.builder().id(id).position("first").put("k1", new byte[]{1}).put("k2", new byte[]{2}).build();
+        List<RawdataMessage> others = List.of(
+                RawdataMessage.builder().id(id).position("other").put("k1", new byte[]{1}).put("k2", new byte[]{2}).build(),
+                RawdataMessage.builder().id(id).position("first").put("k1", new byte[]{1}).put("k2", new byte[]{9}).build(),
+                RawdataMessage.builder().id(id).position("first").put("k2", new byte[]{2}).put("k1", new byte[]{1}).build(),
+                RawdataMessage.builder().id(id).position("first").sequenceNumber(1).put("k1", new byte[]{1}).put("k2", new byte[]{2}).build());
+        try (RawdataProducer producer = client.producer(topic)) {
+            RawdataDuplicateIdException inOneCall = assertThrows(RawdataDuplicateIdException.class,
+                    () -> producer.publish(message("b"), first, others.get(0)));
+            assertEquals(id, inOneCall.id());
+            assertEquals(topic, inOneCall.topic());
+            producer.publish(first);
+            for (RawdataMessage other : others) {
+                assertThrows(RawdataDuplicateIdException.class, () -> producer.publish(message("c"), other)); // being written
+            }
+        }
+        awaitPublished(client, topic);
+        try (RawdataProducer producer = client.producer(topic)) {
+            for (RawdataMessage other : others) {
+                assertThrows(RawdataDuplicateIdException.class, () -> producer.publish(message("d"), other)); // published
+            }
+            producer.publish(message("e"));
+        }
+        try (RawdataConsumer consumer = client.consumer(topic)) {
+            assertEquals(List.of("a", "first", "e"), readAll(consumer));
         }
     }
 

@@ -1,8 +1,13 @@
 package io.descoped.rawdata.memory;
 
+import io.descoped.rawdata.api.RawdataDuplicateIdException;
 import io.descoped.rawdata.api.RawdataIds;
 import io.descoped.rawdata.api.RawdataMessage;
+import io.descoped.rawdata.api.spi.RawdataDuplicates;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
@@ -30,7 +35,8 @@ final class MemoryRawdataTopic {
 
     /**
      * Writes messages under one lock, so a batch is atomic and generated ids follow the topic's greatest id. A given id
-     * is kept as it is, in any order; one that is already in the topic replaces that message, as in 2.x.
+     * is kept as it is, in any order. An id is unique: the same message again is not written twice, and a different
+     * message under a taken id is refused, writing nothing.
      */
     void publish(RawdataMessage[] batch) {
         lock.lock();
@@ -50,7 +56,16 @@ final class MemoryRawdataTopic {
                     greatest = id;
                 }
             }
-            for (RawdataMessage message : stored) {
+            List<RawdataMessage> fresh = new ArrayList<>();
+            for (RawdataMessage message : RawdataDuplicates.distinct(name, Arrays.asList(stored)).values()) {
+                RawdataMessage taken = messages.get(message.id());
+                if (taken == null) {
+                    fresh.add(message);
+                } else if (!RawdataDuplicates.same(taken, message)) {
+                    throw new RawdataDuplicateIdException(name, message.id());
+                }
+            }
+            for (RawdataMessage message : fresh) {
                 messages.put(message.id(), message);
             }
             published.signalAll();

@@ -39,9 +39,13 @@ it with `rawdata.client.provider=mystore`.
 `io.descoped.rawdata.api.spi` has the parts every provider that reads its store in batches needs:
 
 - `OrderedRawdataProducer`: argument checks, `publishAsync`, closing, and `withIds(batch, lastId)`, which gives ids
-  after the topic's last id and checks given ones. You implement `write(batch)`: find the topic's last id, call
-  `withIds`, and write the result, all or nothing, after everything in the topic. If the topic moved since this
-  client last wrote it (another process wrote), throw `RawdataWriterConflictException` and write nothing.
+  after the topic's greatest id and keeps given ones. You implement `write(batch)`: find the topic's greatest id,
+  call `withIds`, leave out the messages already in the topic, and write the rest, all or nothing. If the topic moved
+  since this client last wrote it (another process wrote), throw `RawdataWriterConflictException` and write nothing.
+- `RawdataDuplicates`: the unique-id rule. `distinct` leaves out a message repeated within the call and refuses two
+  different ones with one id; `same` tells whether a given message is the one stored under its id. Only an id at or
+  below the topic's greatest can be taken. A different message under a taken id fails the call with
+  `RawdataDuplicateIdException`.
 - `PollingRawdataConsumer`: the receive loop, waking, `receiveAsync`, `seek` and closing. You implement
   `fill(buffer)`, which reads the messages after the last one read, and `reposition(timestamp)`.
 

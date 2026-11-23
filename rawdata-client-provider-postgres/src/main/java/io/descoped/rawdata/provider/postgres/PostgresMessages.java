@@ -1,18 +1,16 @@
 package io.descoped.rawdata.provider.postgres;
 
-import io.descoped.rawdata.api.RawdataException;
+import io.descoped.rawdata.api.RawdataDuplicateIdException;
 import io.descoped.rawdata.api.RawdataMessage;
+import io.descoped.rawdata.api.spi.RawdataDuplicates;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -52,50 +50,27 @@ final class PostgresMessages {
     }
 
     /**
-     * Leaves out the messages that are already stored: a message whose id is in the topic with the same position,
-     * ordering group, sequence number and content (in the same order) was written before, so writing it again is a
-     * no-op, and a message repeated within the batch is written once. A different message under an id already taken
-     * is refused.
+     * Leaves out the messages that are already stored: an id is unique within a topic, so a message whose id is in the
+     * topic with the same position, ordering group, sequence number and content (in the same order) was written
+     * before, and writing it again is a no-op; a message repeated within the batch is written once. A different
+     * message under an id already taken is refused.
      *
      * @return the messages still to write, in the batch's order
-     * @throws RawdataException naming the topic and the id, if a message differs from the one stored under its id
+     * @throws RawdataDuplicateIdException if a message differs from the one stored, or given earlier, under its id
      */
     static List<RawdataMessage> notStored(Connection connection, String topic, List<RawdataMessage> messages) throws SQLException {
-        Map<UUID, RawdataMessage> fresh = new LinkedHashMap<>();
-        for (RawdataMessage m : messages) {
-            RawdataMessage earlier = fresh.putIfAbsent(m.id(), m);
-            if (earlier != null && !same(earlier, m)) {
-                throw new RawdataException("Two different messages with id " + m.id() + " in one publish to topic " + topic);
-            }
-        }
+        Map<UUID, RawdataMessage> fresh = RawdataDuplicates.distinct(topic, messages);
         try (PreparedStatement select = connection.prepareStatement(WITH_IDS_SQL)) {
             select.setString(1, topic);
             select.setArray(2, connection.createArrayOf("uuid", fresh.keySet().toArray()));
             select.setString(3, topic);
             for (RawdataMessage stored : read(select)) {
-                if (!same(stored, fresh.remove(stored.id()))) {
-                    throw new RawdataException("Id " + stored.id() + " is already in topic " + topic + " with another message");
+                if (!RawdataDuplicates.same(stored, fresh.remove(stored.id()))) {
+                    throw new RawdataDuplicateIdException(topic, stored.id());
                 }
             }
         }
         return new ArrayList<>(fresh.values());
-    }
-
-    /**
-     * The same message: content keys compared in order, as their ordinal is stored, so not {@code equals}, which
-     * compares them as a set.
-     */
-    private static boolean same(RawdataMessage a, RawdataMessage b) {
-        if (!a.position().equals(b.position()) || !Objects.equals(a.orderingGroup(), b.orderingGroup())
-                || a.sequenceNumber() != b.sequenceNumber() || !List.copyOf(a.keys()).equals(List.copyOf(b.keys()))) {
-            return false;
-        }
-        for (String key : a.keys()) {
-            if (!Arrays.equals(a.get(key), b.get(key))) {
-                return false;
-            }
-        }
-        return true;
     }
 
     static List<RawdataMessage> after(Connection connection, String topic, UUID id, boolean inclusive, int limit) throws SQLException {

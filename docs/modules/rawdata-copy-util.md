@@ -425,13 +425,10 @@ what the target has. Typical causes:
 - `IllegalArgumentException` from a metadata `put`: the key is longer than the target allows, for example a key over
   127 bytes copied from `postgres` to `filesystem` (see [Metadata](../contract.md#metadata)). The messages are
   copied; copy without `--metadata`, or shorten the keys in the source.
-- Messages copied twice into a `filesystem`, `gcs` or `s3` target: after a crash of a run, the next run reads the
-  target's end before its first publish, and that publish first uploads the windows the crashed run left behind, so
-  the messages in them are copied again. Those providers do not check ids for duplicates, as in 2.x. (A `postgres`
-  target takes a message it already holds as written, so copying it again does no harm there.)
-- `RawdataException` from a `postgres` target, "is already in topic ... with another message": the source holds two
-  different messages under one id, which a `filesystem`, `gcs` or `s3` topic can, and `postgres` refuses the second.
-  Give the source's messages unique ids, or copy into a provider that keeps both.
+- `RawdataDuplicateIdException`: the source holds two different messages under one id, which a `filesystem`, `gcs` or
+  `s3` topic written before 3.1.0 can. The target refuses the second. Give the source's messages unique ids. A message
+  the target already holds is not a failure: copying it again is a no-op, so a run after a crash copies nothing
+  twice.
 
 **Exit 1, `interrupted; run again to continue`.** The thread was interrupted while it waited for the source.
 

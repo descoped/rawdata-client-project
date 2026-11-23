@@ -170,8 +170,10 @@ writer fails with `RawdataWriterConflictException`. It never merges its messages
 An id is unique within a topic ([the contract](../contract.md#ids-and-order)). An id above the topic's greatest is
 new, so only a given id at or below it is looked up, under the publish lock, before the call is written:
 
-- in the open window and the windows waiting for upload: the writer keeps a SHA-256 digest of each of their messages
-  by id, and drops a window's digests once it is uploaded;
+- in the open window and the windows waiting for upload: the writer keeps their ids, and drops a window's ids once it
+  is uploaded. A message given with its id also keeps a SHA-256 digest, computed before the publish lock. A generated
+  id keeps none: no one sees it before its segment is uploaded, so a message given that id while it waits is another
+  message, unless its segment was stored just now, and then the stored message is compared;
 - in the uploaded segments: a segment may hold the id if its header's lowest id is at or below it and its greatest id
   so far at or above it. The writer keeps the headers it read and the ids of the last few segments it read, so an
   ascending run of ids, such as a copy run again, reads each segment about once.
@@ -182,8 +184,9 @@ written before 3.1.0 may hold an id twice; the first is the one compared.
 
 What it costs:
 
-- Every appended message is hashed, generated ids included, since a later given id may equal one. The digests of
-  the open window and the windows waiting for upload stay in memory, about 150 bytes per message.
+- A message given with its id is hashed, outside the publish lock; a message with a generated id is not. The ids of
+  the open window and the windows waiting for upload stay in memory, about 80 bytes per message, plus about 50 bytes
+  for the digest of a given one.
 - The first lookup reads the header of every segment from the first that may hold the id to the last, one ranged
   read each; the headers are kept.
 - The writer streams a segment that may hold the id, in ranges as a consumer does, and keeps its ids and digests.

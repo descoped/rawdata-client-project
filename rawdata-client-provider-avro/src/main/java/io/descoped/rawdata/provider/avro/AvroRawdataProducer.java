@@ -4,6 +4,8 @@ import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.RawdataWriterConflictException;
 import io.descoped.rawdata.api.spi.OrderedRawdataProducer;
 
+import java.util.IdentityHashMap;
+import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -26,11 +28,17 @@ final class AvroRawdataProducer extends OrderedRawdataProducer {
     @Override
     protected void write(RawdataMessage[] batch) {
         String topic = topic();
+        Map<RawdataMessage, byte[]> given = new IdentityHashMap<>(); // hashed before the lock, as producers may in parallel
+        for (RawdataMessage message : batch) {
+            if (message.id() != null) {
+                given.put(message, AvroTakenIds.digest(message));
+            }
+        }
         ReentrantLock lock = client.publishLock(topic); // producers of this client take turns on a topic
         lock.lock();
         try {
             checkOpen();
-            client.writer(topic).publish(last -> withIds(batch, last));
+            client.writer(topic).publish(last -> withIds(batch, last), given);
         } finally {
             lock.unlock();
         }

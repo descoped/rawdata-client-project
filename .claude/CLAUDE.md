@@ -78,26 +78,8 @@ this repository.
   (milestones, RCs, alphas) only on request. Old and outdated code and configuration is removed, not carried along.
 - **Releases only with the owner's go-ahead.** A release (`release:prepare`/`release:perform`, an upload to the
   Central Portal) is made by the owner or on his explicit word.
-- **Publishing.** Releases are published only to Maven Central, by hand, through the Central Portal (profiles
-  `central,sign`). **No SNAPSHOT ever goes to Central**: the Portal limits monthly publishing (owner's decision,
-  2026-11-17), and the `central` profile's enforcer refuses a SNAPSHOT version. SNAPSHOTs go only to Descoped's AWS
-  CodeArtifact repository `maven-snapshots`, read publicly at `https://maven.descoped.io/`, for development across
-  repositories (owner's decision, 2026-11-23): CI's `snapshot` job deploys with the profile `descoped-snapshots` after
-  a green build, on a push to master and on a run by hand on a branch (version `X.Y.Z-<branch>-SNAPSHOT`), never on a
-  pull request or a tag. The AWS account and the publishing endpoint are in no file of this repository: the POM reads
-  `${descoped.snapshots.url}` from a `settings.xml` profile, and CI takes the role from the organization secret
-  `CODEARTIFACT_SNAPSHOTS_ROLE_ARN` and looks the endpoint up. That profile has no release repository and its enforcer
-  refuses a release version; without a profile, `deploy` has no repository. CI publishes nothing to Central. For
-  reading, the root POM declares one repository, `descoped-snapshots-public` (`https://maven.descoped.io/`, SNAPSHOTs
-  only), for SNAPSHOTs of other Descoped modules during development; Maven Central stays Maven's default, and a
-  release has no SNAPSHOT dependency (owner's decision, 2026-11-23). Maven 3.10 sends a server's credentials only to
-  the hosts it knows for that id, and the id `central` is bound to Maven Central, so the server `central` in
-  `~/.m2/settings.xml` must list `https://central.sonatype.com` in `repositoryOrigins`. `rawdata-copy-util` is a
-  program, excluded from the Central bundle (`excludeArtifacts`); its zip goes on the GitHub release (owner's
-  decision, 2026-11-18). Release tags are `v<version>` (`v3.0.0`). After the release is published on Central, the
-  owner runs `release.yml` (`gh workflow run release.yml -f version=<version>`): it checks the version is on Central,
-  builds the copy tool from the tag and publishes the GitHub release with the CHANGELOG section as notes (owner's
-  decision, 2026-11-19).
+- **Publishing.** Releases go only to Maven Central, SNAPSHOTs only to `https://maven.descoped.io/`. The copy tool is
+  not on Central; its zip goes on the GitHub release. How it is done: [releasing](../docs/releasing.md).
 - **SonarCloud**: one project, `descoped_rawdata-client-project`, for the whole reactor.
 
 ## Testing
@@ -159,13 +141,6 @@ this repository.
   API must find all six providers and round-trip through filesystem, PostgreSQL 18, a fake GCS and S3Mock, both with
   everything on the module path and with everything on the class path; `jdeps --check`
   must find nothing to change in the module declarations. Needs Docker.
-
-## Maven Wrapper
-
-- `./mvnw` pins Maven (`.mvn/wrapper/maven-wrapper.properties`, type `only-script`, so no jar in the repository) and
-  checks the download against `distributionSha256Sum`. CI runs `./mvnw`. When Maven is bumped, by Renovate or by hand,
-  set `distributionSha256Sum` to the SHA-256 of the new `apache-maven-<version>-bin.zip`, after checking that zip
-  against the `.sha512` Maven publishes next to it. A stale checksum fails the build, it never skips the check.
 
 ## Commands
 

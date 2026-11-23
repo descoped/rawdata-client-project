@@ -107,9 +107,6 @@ jobs:
           java-version: '17'
           distribution: temurin
           cache: maven
-          server-id: descoped-snapshots
-          server-username: CODEARTIFACT_USER
-          server-password: CODEARTIFACT_AUTH_TOKEN
 
       - name: Branch version
         if: github.ref != 'refs/heads/master'
@@ -134,13 +131,25 @@ jobs:
           role-to-assume: arn:aws:iam::764178632479:role/codeartifact-maven-snapshots-publisher
           aws-region: eu-north-1
 
+      # The token is short-lived and comes from the role; settings.xml reads it from the environment.
       - name: CodeArtifact token
         run: |
           token=$(aws codeartifact get-authorization-token --domain descoped --domain-owner 764178632479 \
             --region eu-north-1 --query authorizationToken --output text)
           echo "::add-mask::$token"
-          echo "CODEARTIFACT_USER=aws" >> "$GITHUB_ENV"
           echo "CODEARTIFACT_AUTH_TOKEN=$token" >> "$GITHUB_ENV"
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml <<'XML'
+          <settings>
+            <servers>
+              <server>
+                <id>descoped-snapshots</id>
+                <username>aws</username>
+                <password>${env.CODEARTIFACT_AUTH_TOKEN}</password>
+              </server>
+            </servers>
+          </settings>
+          XML
 
       - name: Deploy
         run: ./mvnw --batch-mode --no-transfer-progress -P descoped-snapshots -DskipTests deploy

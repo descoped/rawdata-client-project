@@ -89,7 +89,7 @@
     </scm>
 
     <!-- SNAPSHOTs of other Descoped modules, read from maven.descoped.io during development. Releases come from Maven
-         Central, Maven's default; a release has no SNAPSHOT dependency (the release plugin refuses one). The id is not
+         Central, Maven's default; a release has no SNAPSHOT dependency (the central profile's enforcer refuses one). The id is not
          descoped-snapshots: that server holds the publishing token, which must never go to this URL. Publishing is
          configured by the profile descoped-snapshots and a settings.xml profile, not here. -->
     <repositories>
@@ -131,6 +131,9 @@
                                         <requireReleaseVersion>
                                             <message>Only releases go to Maven Central; SNAPSHOTs go to maven.descoped.io (-P descoped-snapshots).</message>
                                         </requireReleaseVersion>
+                                        <requireReleaseDeps>
+                                            <message>A release has no SNAPSHOT dependency.</message>
+                                        </requireReleaseDeps>
                                     </rules>
                                 </configuration>
                             </execution>

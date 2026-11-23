@@ -13,7 +13,9 @@ rules, and how the build keeps them.
    The BOM (`rawdata-client-bom`) manages the rawdata modules only.
 4. **Few dependencies.** The JDK first: `gcs` talks to GCS on `java.net.http` instead of Google's client libraries.
 5. **SNAPSHOT dependencies only from maven.descoped.io**, the root POM's only declared repository, and never in a
-   release. Modules depend on each other with `${project.version}`.
+   release (the `central` profile's enforcer refuses one). Modules depend on each other with `${project.version}`.
+   The repository is published with the parent POM, so an application that uses rawdata also looks there for
+   SNAPSHOT versions; releases still come only from Maven Central, as releases are disabled for it.
 
 ## How the build keeps them
 

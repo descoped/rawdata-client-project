@@ -180,6 +180,16 @@ A message found with the same digest (position, ordering group, sequence number,
 bytes) is left out; a different one fails the call with `RawdataDuplicateIdException`, writing nothing. A topic
 written before 3.1.0 may hold an id twice; the first is the one compared.
 
+What it costs:
+
+- Every appended message is hashed, generated ids included, since a later given id may equal one. The digests of
+  the open window and the windows waiting for upload stay in memory, about 150 bytes per message.
+- The first lookup reads the header of every segment from the first that may hold the id to the last, one ranged
+  read each; the headers are kept.
+- The writer streams a segment that may hold the id, in ranges as a consumer does, and keeps its ids and digests.
+  Ascending ids reuse the last few segments read; ids in random order, below the topic's greatest, may stream a
+  segment per lookup.
+
 ### Upload concurrency (AIMD)
 
 Uploads of one topic run one at a time, in segment order. Across topics, a client runs several uploads at once,

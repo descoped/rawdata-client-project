@@ -243,9 +243,9 @@ final class AvroTopicWriter {
             if (RawdataIds.ORDER.compare(message.id(), window.lastId) > 0) {
                 continue; // after the topic's greatest id: not taken
             }
-            byte[] taken = takenDigest(message.id(), window);
-            if (taken != null) {
-                if (!Arrays.equals(taken, AvroTakenIds.digest(message))) {
+            Optional<byte[]> taken = takenDigest(message.id(), window);
+            if (taken.isPresent()) {
+                if (!Arrays.equals(taken.get(), AvroTakenIds.digest(message))) {
                     throw new RawdataDuplicateIdException(topic, message.id());
                 }
                 each.remove(); // written before
@@ -255,13 +255,13 @@ final class AvroTopicWriter {
     }
 
     /**
-     * The digest of the message under an id in the topic, or null. A window is in {@code pending} until its segment is
+     * The digest of the message under an id in the topic, if it is taken. A window is in {@code pending} until its segment is
      * uploaded, so a window that uploads meanwhile is found in one or the other.
      */
-    private byte[] takenDigest(UUID id, Window window) {
+    private Optional<byte[]> takenDigest(UUID id, Window window) {
         byte[] digest = window.digests.get(id);
         if (digest != null) {
-            return digest;
+            return Optional.of(digest);
         }
         List<Map<UUID, byte[]>> waiting = new ArrayList<>();
         long uploaded;
@@ -274,10 +274,10 @@ final class AvroTopicWriter {
         for (Map<UUID, byte[]> digests : waiting) {
             digest = digests.get(id);
             if (digest != null) {
-                return digest;
+                return Optional.of(digest);
             }
         }
-        return takenIds.digest(id, uploaded);
+        return takenIds.find(id, uploaded);
     }
 
     private static void append(Window window, List<RawdataMessage> stored) throws IOException {

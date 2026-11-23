@@ -17,8 +17,8 @@ public interface RawdataProducer extends AutoCloseable {
 
     /**
      * Publishes messages, in order. A message without an id is given one that is greater than every id already in
-     * the topic. The messages of one call are written together: either all of them or none. As
-     * {@link #publish(RawdataMessage...)}, also for a given id that is taken.
+     * the topic. The messages of one call are written together: either all of them or none. A given id that is taken
+     * is handled as in {@link #publish(RawdataMessage...)}.
      *
      * @param messages the messages
      * @throws RawdataClosedException      if the producer or its client is closed

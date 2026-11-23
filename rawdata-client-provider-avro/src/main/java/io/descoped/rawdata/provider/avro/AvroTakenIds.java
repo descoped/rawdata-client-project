@@ -10,6 +10,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -18,7 +19,9 @@ import java.util.UUID;
  * Segments never change once uploaded, so their summaries and ids are kept: the summaries of the segments looked at,
  * and the ids of the last few segments read. A segment may hold an id if its lowest id is at or below it and the
  * topic's greatest id up to and with it is at or above it; an ascending run of ids, such as a copy run again, reads
- * each segment of the target about once. Used under the topic's publish lock.
+ * each segment of the target about once. The first lookup reads the header of every segment from the first that may
+ * hold the id to the last, one ranged read each; ids in random order may stream a segment per lookup. Used under
+ * the topic's publish lock.
  */
 final class AvroTakenIds {
 
@@ -45,9 +48,9 @@ final class AvroTakenIds {
      *
      * @param id          the id
      * @param lastSegment the last uploaded segment, -1 if none
-     * @return the digest, or null if the id is not in those segments
+     * @return the digest, or empty if the id is not in those segments
      */
-    byte[] digest(UUID id, long lastSegment) {
+    Optional<byte[]> find(UUID id, long lastSegment) {
         long low = 0;
         long high = lastSegment + 1; // the first segment whose greatest id so far reaches the id, in [low, high]
         while (low < high) {
@@ -62,11 +65,11 @@ final class AvroTakenIds {
             if (RawdataIds.ORDER.compare(summary(segment).firstId(), id) <= 0) {
                 byte[] digest = idsOf(segment).get(id);
                 if (digest != null) {
-                    return digest;
+                    return Optional.of(digest);
                 }
             }
         }
-        return null;
+        return Optional.empty();
     }
 
     private AvroSegments.Summary summary(long segment) {

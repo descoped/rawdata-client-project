@@ -137,7 +137,9 @@ this repository.
   - **Reads in ranges** (Ove, 2026-11-18): a segment is never read whole by a reader. Its header's summary (the
     segment's lowest id, the topic's greatest id so far, count, last-block offset; the header only, not object metadata)
     serves seek and `lastMessage`, and consumers stream it. `AvroStore.open` pins a read to the object it found
-    (generation, ETag, file key) and holds no resources.
+    (generation, ETag, file key) and holds no resources. The writer's unique-id check (3.1.0) streams a segment that may
+    hold a given id the way a consumer does, in ranges, and keeps only its ids and digests (`AvroTakenIds`, the last
+    few segments).
   - **Uploads** carry a CRC32C (GCS `X-Goog-Hash`, S3 `x-amz-checksum-crc32c`), and run at most an AIMD limit at once
     across a client's topics (`AvroUploadLimiter`: start 4, +1 per round at the limit, half on a throttled upload at
     most once a second, cap `avro-file.upload.max-concurrency`, 16; Ove, 2026-11-19). A store reports throttling of

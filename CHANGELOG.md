@@ -10,7 +10,9 @@
   message, `postgres` refused even the same message through its primary key, and `filesystem`, `gcs` and `s3` stored
   both, so consumers read the id twice.
 - `filesystem`, `gcs` and `s3` look up a given id at or below the topic's greatest id: in the windows not yet uploaded
-  and in the segments that may hold it. Ids above it, and generated ids, cost nothing.
+  and in the segments that may hold it. Ids above it, and generated ids, are not looked up. Every appended message is
+  hashed (SHA-256 of its position, ordering fields and content), and the digests of the windows not yet uploaded are
+  kept in memory, about 150 bytes per message.
 - `io.descoped.rawdata.api.spi.RawdataDuplicates`: the rule for providers, `same` and `distinct`.
 
 ## 3.0.1

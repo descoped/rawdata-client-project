@@ -1,7 +1,19 @@
 # Releasing
 
-Releases are made **only by the owner, or on his explicit word**. SNAPSHOTs are never published: the Central
-Portal's free tier limits monthly publishing.
+Releases are made **only by the owner, or on his explicit word**, and go only to Maven Central. A SNAPSHOT never goes
+to Central: the Portal limits monthly publishing, and the `central` profile refuses a SNAPSHOT version.
+
+SNAPSHOTs go only to Descoped's AWS CodeArtifact repository, read publicly at `https://maven.descoped.io/`, for
+development across repositories. CI's `snapshot` job publishes them after a green build, with the profile
+`descoped-snapshots`:
+
+- a push to master publishes the current `X.Y.Z-SNAPSHOT`;
+- a run by hand on another branch (`gh workflow run ci.yml --ref <branch>`) publishes `X.Y.Z-<branch>-SNAPSHOT`, so
+  it never replaces master's;
+- a pull request or a tag publishes nothing.
+
+The profile has no release repository, and its enforcer refuses a release version. Without a profile, `deploy` has no
+repository at all.
 
 A release is two things, in this order:
 

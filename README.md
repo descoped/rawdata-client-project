@@ -198,7 +198,18 @@ SonarCloud (project `descoped_rawdata-client-project`). See [building and testin
   signed with his GPG key. CI publishes nothing to Maven Central.
 - The libraries (API, TCK, providers, BOM) go to Maven Central through the Central Portal, with sources, Javadoc
   and signatures. All modules share one version, and the tag is the version with a `v`, for example `v3.0.0`.
-- **No SNAPSHOTs are published**, by CI or by hand: the Central Portal's free tier limits monthly publishing.
+- **No SNAPSHOT goes to Maven Central.** SNAPSHOTs of master, and of a branch when run by hand
+  (`X.Y.Z-<branch>-SNAPSHOT`), are published by CI to `https://maven.descoped.io/` after a green build, for
+  development across repositories; releases never go there. To use one:
+
+  ```xml
+  <repository>
+      <id>descoped-snapshots</id>
+      <url>https://maven.descoped.io/</url>
+      <releases><enabled>false</enabled></releases>
+      <snapshots><enabled>true</enabled></snapshots>
+  </repository>
+  ```
 - After Central, the `Release` workflow publishes the GitHub release for the tag, with the CHANGELOG section as its
   notes and the copy tool, `rawdata-copy-<version>.zip` (the jar and `lib/`), which is not on Central and not in the
   BOM. See [releasing](docs/releasing.md).

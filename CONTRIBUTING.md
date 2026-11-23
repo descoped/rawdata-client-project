@@ -108,8 +108,8 @@ client is a lightweight, cheap way to stream over object storage, not a pub/sub 
 
 ## Releases
 
-Releases are made only by the owner, and only to Maven Central. CI publishes SNAPSHOTs of master to
-`https://maven.descoped.io/` and nothing to Maven Central. See [releasing](docs/releasing.md).
+Releases are made only by the owner, and only to Maven Central. CI publishes SNAPSHOTs of master, and of a branch
+when run by hand, to `https://maven.descoped.io/`, and nothing to Maven Central. See [releasing](docs/releasing.md).
 
 ## License
 

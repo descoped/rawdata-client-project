@@ -32,10 +32,11 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same pull request or branch ends the run it replaces.
+# A newer push to the same pull request ends the run it replaces. On a branch, runs queue instead: a cancelled
+# snapshot job could leave the modules' SNAPSHOTs at different builds.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:

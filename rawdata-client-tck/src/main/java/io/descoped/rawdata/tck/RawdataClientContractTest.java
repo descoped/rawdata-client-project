@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -480,6 +481,146 @@ public abstract class RawdataClientContractTest {
         }
         try (RawdataConsumer consumer = client.consumer(topic)) {
             assertEquals(List.of("a", "first", "e"), readAll(consumer));
+        }
+    }
+
+    /**
+     * A message read back, with the id the producer gave it, and published again is a no-op: how an application
+     * repeats a message it gave no id.
+     *
+     * @throws InterruptedException if interrupted while waiting
+     */
+    @Test
+    public void aMessageReadBackAndPublishedAgainIsWrittenOnce() throws InterruptedException {
+        publish("a", "b");
+        List<RawdataMessage> read = new ArrayList<>();
+        try (RawdataConsumer consumer = client.consumer(topic)) {
+            read.addAll(consumer.receiveUpTo(10, Duration.ofSeconds(1)));
+        }
+        assertEquals(2, read.size());
+        try (RawdataProducer producer = client.producer(topic)) {
+            producer.publish(read);
+            producer.publish(read.get(1), read.get(0));
+        }
+        awaitPublished(client, topic);
+        try (RawdataConsumer consumer = client.consumer(topic)) {
+            assertEquals(List.of("a", "b"), readAll(consumer));
+        }
+    }
+
+    /**
+     * A different message under an id the producer gave is refused, as under a given id.
+     *
+     * @throws InterruptedException if interrupted while waiting
+     */
+    @Test
+    public void aDifferentMessageUnderAGeneratedIdIsRefused() throws InterruptedException {
+        publish("a");
+        UUID generated = client.lastMessage(topic).id();
+        try (RawdataProducer producer = client.producer(topic)) {
+            RawdataDuplicateIdException refused = assertThrows(RawdataDuplicateIdException.class,
+                    () -> producer.publish(RawdataMessage.builder().id(generated).position("other").build()));
+            assertEquals(generated, refused.id());
+        }
+        awaitPublished(client, topic);
+        try (RawdataConsumer consumer = client.consumer(topic)) {
+            assertEquals(List.of("a"), readAll(consumer));
+        }
+    }
+
+    /**
+     * Producers of one client that publish one new id at once write it once: with the same message, every publish
+     * succeeds; with different messages, one succeeds and the others are refused. The check and the write are one
+     * step.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    public void producersPublishingOneIdAtOnceWriteItOnce() throws Exception {
+        int threads = 8;
+        UUID same = RawdataIds.generate();
+        UUID contested = RawdataIds.next(same);
+        RawdataMessage repeated = RawdataMessage.builder().id(same).position("same").put("k", new byte[]{1}).build();
+        List<Future<Boolean>> results = new ArrayList<>();
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            for (int t = 0; t < threads; t++) {
+                RawdataMessage different = RawdataMessage.builder().id(contested).position("p" + t).build();
+                results.add(executor.submit(() -> {
+                    start.await();
+                    try (RawdataProducer producer = client.producer(topic)) {
+                        producer.publish(repeated);
+                        try {
+                            producer.publish(different);
+                            return true;
+                        } catch (RawdataDuplicateIdException e) {
+                            assertEquals(contested, e.id());
+                            return false;
+                        }
+                    }
+                }));
+            }
+            start.countDown();
+            int written = 0;
+            for (Future<Boolean> result : results) {
+                written += result.get(60, TimeUnit.SECONDS) ? 1 : 0;
+            }
+            assertEquals(1, written, "one of the different messages is written");
+        } finally {
+            executor.shutdownNow();
+        }
+        awaitPublished(client, topic);
+        try (RawdataConsumer consumer = client.consumer(topic)) {
+            List<String> read = readAll(consumer);
+            assertEquals(2, read.size(), "each id once: " + read);
+            assertTrue(read.contains("same"));
+            assertTrue(read.stream().anyMatch(position -> position.matches("p[0-7]")), "one of the different messages: " + read);
+        }
+    }
+
+    /**
+     * A publishAsync with a taken id fails its future with RawdataDuplicateIdException, writing nothing.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    public void anAsynchronousPublishOfATakenIdFails() throws Exception {
+        publish("a");
+        UUID id = client.lastMessage(topic).id();
+        try (RawdataProducer producer = client.producer(topic)) {
+            CompletableFuture<Void> future = producer.publishAsync(message("b"),
+                    RawdataMessage.builder().id(id).position("other").build());
+            ExecutionException failed = assertThrows(ExecutionException.class, () -> future.get(30, TimeUnit.SECONDS));
+            RawdataDuplicateIdException refused = assertInstanceOf(RawdataDuplicateIdException.class, failed.getCause());
+            assertEquals(id, refused.id());
+            assertEquals(topic, refused.topic());
+        }
+        awaitPublished(client, topic);
+        try (RawdataConsumer consumer = client.consumer(topic)) {
+            assertEquals(List.of("a"), readAll(consumer));
+        }
+    }
+
+    /**
+     * A copy run again into the same target writes nothing: the target holds each message once, as after the first.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    public void aCopyRunAgainWritesNothingTwice() throws Exception {
+        for (int i = 0; i < 20; i++) {
+            publish("m" + i);
+        }
+        String target = topic + "-copy";
+        for (int run = 0; run < 2; run++) {
+            try (RawdataConsumer from = client.consumer(topic); RawdataProducer to = client.producer(target)) {
+                assertEquals(20, RawdataCopy.copy(from, to, 6, Duration.ZERO));
+            }
+        }
+        awaitPublished(client, target);
+        try (RawdataConsumer source = client.consumer(topic); RawdataConsumer copy = client.consumer(target)) {
+            assertEquals(readAll(source), readAll(copy));
         }
     }
 

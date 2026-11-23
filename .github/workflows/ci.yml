@@ -158,8 +158,10 @@ jobs:
           export CODEARTIFACT_AUTH_TOKEN="$token"
           url=$(aws codeartifact get-repository-endpoint --domain descoped --repository maven-snapshots \
             --format maven --query repositoryEndpoint --output text)
+          origin=$(printf '%s' "$url" | sed -E 's#^(https://[^/]+).*#\1#')
           echo "::add-mask::$url"
-          export SNAPSHOTS_URL="$url"
+          echo "::add-mask::$origin"
+          export SNAPSHOTS_URL="$url" SNAPSHOTS_ORIGIN="$origin"
           mkdir -p ~/.m2
           cat > ~/.m2/settings.xml <<'XML'
           <settings>
@@ -168,6 +170,9 @@ jobs:
                 <id>descoped-snapshots</id>
                 <username>aws</username>
                 <password>${env.CODEARTIFACT_AUTH_TOKEN}</password>
+                <repositoryOrigins>
+                  <repositoryOrigin>${env.SNAPSHOTS_ORIGIN}</repositoryOrigin>
+                </repositoryOrigins>
               </server>
             </servers>
             <profiles>
@@ -183,4 +188,5 @@ jobs:
             </activeProfiles>
           </settings>
           XML
-          ./mvnw --batch-mode --no-transfer-progress -P descoped-snapshots -DskipTests deploy
+          ./mvnw --batch-mode --no-transfer-progress -P descoped-snapshots -Dmaven.repository.credentialScope=strict \
+            -DskipTests deploy

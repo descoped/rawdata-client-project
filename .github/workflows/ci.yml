@@ -59,13 +59,14 @@ jobs:
           distribution: temurin
           cache: maven
 
+      # Modules build in parallel, a thread per core: the providers' tests run side by side.
       - name: Build, test and Javadoc
         if: env.ANALYSE != 'true'
-        run: ./mvnw --batch-mode --no-transfer-progress verify javadoc:javadoc
+        run: ./mvnw --batch-mode --no-transfer-progress --threads 1C verify javadoc:javadoc
 
       - name: Build, test, Javadoc and coverage
         if: env.ANALYSE == 'true'
-        run: ./mvnw --batch-mode --no-transfer-progress verify javadoc:javadoc -P coverage
+        run: ./mvnw --batch-mode --no-transfer-progress --threads 1C verify javadoc:javadoc -P coverage
 
       # The application view: a module that requires only the API finds every provider and uses filesystem,
       # PostgreSQL 18 and a fake GCS, on the module path and on the class path (Docker runs the stores).

@@ -136,13 +136,15 @@ jobs:
       - id: aws
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
         with:
-          role-to-assume: arn:aws:iam::764178632479:role/codeartifact-maven-snapshots-publisher
+          role-to-assume: ${{ secrets.CODEARTIFACT_SNAPSHOTS_ROLE_ARN }}
           aws-region: eu-north-1
           role-duration-seconds: 900
           output-credentials: true
           output-env-credentials: false
 
-      # The CodeArtifact token lives 15 minutes and only in this step's shell; settings.xml reads it from there.
+      # The CodeArtifact token lives 15 minutes and only in this step's shell; settings.xml reads it from there. The
+      # account is the role's own and the publishing endpoint is looked up here, so neither is in a public file; both
+      # are masked in the log. The role's ARN is an organization secret.
       - name: Deploy
         env:
           AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
@@ -150,10 +152,18 @@ jobs:
           AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
           AWS_REGION: eu-north-1
         run: |
-          token=$(aws codeartifact get-authorization-token --domain descoped --domain-owner 764178632479 \
+          account=$(aws sts get-caller-identity --query Account --output text)
+          echo "::add-mask::$account"
+          token=$(aws codeartifact get-authorization-token --domain descoped \
             --duration-seconds 900 --query authorizationToken --output text)
           echo "::add-mask::$token"
           export CODEARTIFACT_AUTH_TOKEN="$token"
+          url=$(aws codeartifact get-repository-endpoint --domain descoped --repository maven-snapshots \
+            --format maven --query repositoryEndpoint --output text)
+          origin="${url%%/maven/*}"
+          echo "::add-mask::$url"
+          echo "::add-mask::$origin"
+          export SNAPSHOTS_URL="$url" SNAPSHOTS_ORIGIN="$origin"
           mkdir -p ~/.m2
           cat > ~/.m2/settings.xml <<'XML'
           <settings>
@@ -162,8 +172,23 @@ jobs:
                 <id>descoped-snapshots</id>
                 <username>aws</username>
                 <password>${env.CODEARTIFACT_AUTH_TOKEN}</password>
+                <repositoryOrigins>
+                  <repositoryOrigin>${env.SNAPSHOTS_ORIGIN}</repositoryOrigin>
+                </repositoryOrigins>
               </server>
             </servers>
+            <profiles>
+              <profile>
+                <id>descoped-codeartifact</id>
+                <properties>
+                  <descoped.snapshots.url>${env.SNAPSHOTS_URL}</descoped.snapshots.url>
+                </properties>
+              </profile>
+            </profiles>
+            <activeProfiles>
+              <activeProfile>descoped-codeartifact</activeProfile>
+            </activeProfiles>
           </settings>
           XML
-          ./mvnw --batch-mode --no-transfer-progress -P descoped-snapshots -DskipTests deploy
+          ./mvnw --batch-mode --no-transfer-progress -P descoped-snapshots -Dmaven.repository.credentialScope=strict \
+            -DskipTests deploy

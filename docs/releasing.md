@@ -13,7 +13,11 @@ development across repositories. CI's `snapshot` job publishes them after a gree
 - a pull request or a tag publishes nothing.
 
 The profile has no release repository, and its enforcer refuses a release version. Without a profile, `deploy` has no
-repository at all.
+repository at all. The publishing endpoint is in no file of this repository: the profile reads it from the property
+`descoped.snapshots.url`, which a `settings.xml` profile defines, and the enforcer refuses a deploy without it. CI
+assumes the role from the organization secret `CODEARTIFACT_SNAPSHOTS_ROLE_ARN`, looks up the endpoint, and writes
+that `settings.xml`, with the credentials bound to the endpoint's origin; the account and the endpoint are masked in
+the log.
 
 A release is two things, in this order:
 

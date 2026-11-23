@@ -204,12 +204,15 @@ SonarCloud (project `descoped_rawdata-client-project`). See [building and testin
 
   ```xml
   <repository>
-      <id>descoped-snapshots</id>
+      <id>descoped-snapshots-public</id>
       <url>https://maven.descoped.io/</url>
       <releases><enabled>false</enabled></releases>
       <snapshots><enabled>true</enabled></snapshots>
   </repository>
   ```
+
+  The id is `descoped-snapshots-public`, not `descoped-snapshots`: a server with that id holds the publishing token,
+  and Maven would send it to this URL.
 - After Central, the `Release` workflow publishes the GitHub release for the tag, with the CHANGELOG section as its
   notes and the copy tool, `rawdata-copy-<version>.zip` (the jar and `lib/`), which is not on Central and not in the
   BOM. See [releasing](docs/releasing.md).

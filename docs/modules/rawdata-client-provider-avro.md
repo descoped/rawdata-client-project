@@ -165,6 +165,31 @@ the segment numbers: the writer remembers the segment it wrote last, so the next
 after it. If that number is already taken when a window opens or uploads, another process wrote the topic, and the
 writer fails with `RawdataWriterConflictException`. It never merges its messages into the other writer's stream.
 
+### Unique ids
+
+An id is unique within a topic ([the contract](../contract.md#ids-and-order)). An id above the topic's greatest is
+new, so only a given id at or below it is looked up, under the publish lock, before the call is written:
+
+- in the open window and the windows waiting for upload: the writer keeps a SHA-256 digest of each of their messages
+  by id, and drops a window's digests once it is uploaded;
+- in the uploaded segments: a segment may hold the id if its header's lowest id is at or below it and its greatest id
+  so far at or above it. The writer keeps the headers it read and the ids of the last few segments it read, so an
+  ascending run of ids, such as a copy run again, reads each segment about once.
+
+A message found with the same digest (position, ordering group, sequence number, content keys in order and their
+bytes) is left out; a different one fails the call with `RawdataDuplicateIdException`, writing nothing. A topic
+written before 3.1.0 may hold an id twice; the first is the one compared.
+
+What it costs:
+
+- Every appended message is hashed, generated ids included, since a later given id may equal one. The digests of
+  the open window and the windows waiting for upload stay in memory, about 150 bytes per message.
+- The first lookup reads the header of every segment from the first that may hold the id to the last, one ranged
+  read each; the headers are kept.
+- The writer streams a segment that may hold the id, in ranges as a consumer does, and keeps its ids and digests.
+  Ascending ids reuse the last few segments read; ids in random order, below the topic's greatest, may stream a
+  segment per lookup.
+
 ### Upload concurrency (AIMD)
 
 Uploads of one topic run one at a time, in segment order. Across topics, a client runs several uploads at once,
@@ -204,9 +229,9 @@ store at once and is visible when it returns.
 ```
 
 1. **Publish.** The producer takes the topic's publish lock (producers of one client take turns on a topic), gives
-   the messages without an id a UUIDv7 id after the window's last id, and checks given ids against it (a given id
-   must be greater than the one before, by `RawdataIds.ORDER`). It appends the whole call to the open window,
-   opening one if there is none. A call always goes into one window whole, never split across two.
+   the messages without an id a UUIDv7 id after the topic's greatest id, and keeps given ids. It leaves out a message
+   already in the topic and refuses a different one under a taken id ([Unique ids](#unique-ids)). It appends the
+   whole call to the open window, opening one if there is none. A call always goes into one window whole, never split across two.
 2. **End of block.** If the block being filled has reached `avro-file.sync.interval`, the call ends it: the block is
    written and forced to disk.
 3. **Window closes.** The window is closed (sealed) when, after a call, it is at least `avro-file.max.bytes`; when a

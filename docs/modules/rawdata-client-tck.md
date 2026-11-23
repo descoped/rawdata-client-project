@@ -268,12 +268,12 @@ A subclass may add its own `@BeforeAll` or `@AfterAll`, for example to remove te
 
 ### What `RawdataClientContractTest` covers
 
-46 test methods, one of them parameterised over 11 invalid topic names. The groups, in the order of the source:
+48 test methods, one of them parameterised over 11 invalid topic names. The groups, in the order of the source:
 
 | Area | What is checked |
 |---|---|
 | Reading and writing | an unknown topic is empty; `lastMessage` follows the publishes; every field (id, ordering group, sequence number, position, content in order) survives; a message without content and empty and 1 MiB payloads survive; content is copied in and out; `receive` waits for a later message and returns null on timeout |
-| Order | one producer's messages are read in publish order; producers that follow each other keep the order within one millisecond; a generated id follows a given one and the greatest id; given ids in any order are kept, and a reader of the whole topic gets every message once; four parallel producers lose nothing, ids strictly increase by `RawdataIds.ORDER`, and each producer's order is kept |
+| Order | one producer's messages are read in publish order; producers that follow each other keep the order within one millisecond; a generated id follows a given one and the greatest id; given ids in any order are kept, and a reader of the whole topic gets every message once; an id is unique: the same message again is a no-op (still being written, published, after a restart, within one call), and a different one under a taken id, its keys reordered included, is refused with `RawdataDuplicateIdException`, writing nothing; four parallel producers lose nothing, ids strictly increase by `RawdataIds.ORDER`, and each producer's order is kept |
 | Asynchronous calls | `publishAsync` and `receiveAsync` |
 | Consumers | two consumers read independently; `receiveUpTo` returns at most the number asked for and continues where it stopped |
 | Starting points | after or at a position, after or at an id; a position is found with a tolerance of zero; an unknown position throws `RawdataNoSuchPositionException`; `seek` moves to the first message at or after a time, among many publishes too |

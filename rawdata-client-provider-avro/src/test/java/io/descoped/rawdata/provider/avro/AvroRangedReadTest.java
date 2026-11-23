@@ -164,6 +164,32 @@ class AvroRangedReadTest {
     }
 
     /**
+     * Publishing a topic's messages again, in order, as a copy run a second time does, writes nothing and reads each
+     * segment about once: the ids of a segment are kept while the run passes through it.
+     */
+    @Test
+    void aCopyRunAgainReadsEachSegmentAboutOnce() {
+        CountingStore store = new CountingStore();
+        write(store);
+        List<RawdataMessage> messages = new ArrayList<>();
+        try (AvroRawdataClient reader = client(store); RawdataConsumer consumer = reader.consumer(TOPIC)) {
+            RawdataMessage message;
+            while ((message = receive(consumer)) != null) {
+                messages.add(message);
+            }
+        }
+        store.bytesRead.set(0);
+        try (AvroRawdataClient writer = client(store); RawdataProducer producer = writer.producer(TOPIC)) {
+            for (RawdataMessage message : messages) {
+                producer.publish(message);
+            }
+        }
+        assertEquals(SEGMENTS, store.segments.size(), "nothing was written again");
+        assertTrue(store.bytesRead.get() < 2 * store.totalBytes(),
+                store.bytesRead.get() + " bytes read of a topic of " + store.totalBytes());
+    }
+
+    /**
      * Each segment's header holds its first and last id, its count and where its last block starts.
      *
      * @throws IOException if decoding fails

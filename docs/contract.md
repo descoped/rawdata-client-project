@@ -63,9 +63,12 @@ Ids, as in 2.x:
 - An id the producer gives is greater than every id in the topic, also within one millisecond and when the clock
   goes back.
 - An id you give is kept as it is, in any order: it may be lower than ids already in the topic, and lower than the
-  one before it in the same call. Ids must be unique; keeping them so is the caller's job (`memory` replaces a
-  message with the same id; `postgres` takes the same message again as already written and refuses a different one;
-  the Avro providers store both).
+  one before it in the same call.
+- An id is unique within a topic, in every provider. Publishing the same message again (the same id, position,
+  ordering group, sequence number, and content keys and bytes in the same order) is a no-op, also within one call, so
+  a writer that recovers can repeat its last publish and a copy can run again. A different message under an id that
+  is taken is refused with `RawdataDuplicateIdException`, and nothing of the call is written. A consumer never reads
+  an id twice.
 - A topic whose ids were published in increasing order is read in that order. A lower id published later is read
   where the provider puts it: in id order in `memory` and `postgres`, after what was published before it in
   `filesystem`, `gcs` and `s3`.

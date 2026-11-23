@@ -65,8 +65,10 @@ this repository.
   keys by the API. A store that does not exist fails with `RawdataException`, never reads as empty. Topic names are
   validated and never spliced into SQL, file paths or object names. One exception, by the owner's decision of
   2026-11-19 to follow 2.x: given ids are kept in any order, and where a lower id published later is read (id order
-  in memory and postgres, publish order in the Avro providers), what `lastMessage` returns and what a duplicate id does
-  depend on the provider. The TCK checks only what is common: every message of a completed topic is read once.
+  in memory and postgres, publish order in the Avro providers) and what `lastMessage` returns depend on the provider.
+  The TCK checks only what is common: every message of a completed topic is read once. An id is unique within a topic
+  in every provider (owner's decision, 2026-11-23): the same message again is a no-op, a different one is refused with
+  `RawdataDuplicateIdException`, and the TCK checks it.
 - **Ids are UUIDv7** (`RawdataIds`), laid out as PostgreSQL 18's `uuidv7()` (48-bit milliseconds, version 7, 12-bit
   sub-millisecond fraction, variant, 62 random bits) and ordered by `RawdataIds.ORDER` (unsigned, as PostgreSQL
   orders `uuid`), never by `UUID.compareTo`, which is signed. No ULID library (owner's decision, 2026-11-17).
@@ -135,7 +137,9 @@ this repository.
   - **Reads in ranges** (Ove, 2026-11-18): a segment is never read whole by a reader. Its header's summary (the
     segment's lowest id, the topic's greatest id so far, count, last-block offset; the header only, not object metadata)
     serves seek and `lastMessage`, and consumers stream it. `AvroStore.open` pins a read to the object it found
-    (generation, ETag, file key) and holds no resources.
+    (generation, ETag, file key) and holds no resources. The writer's unique-id check (3.1.0) streams a segment that may
+    hold a given id the way a consumer does, in ranges, and keeps only its ids and digests (`AvroTakenIds`, the last
+    few segments).
   - **Uploads** carry a CRC32C (GCS `X-Goog-Hash`, S3 `x-amz-checksum-crc32c`), and run at most an AIMD limit at once
     across a client's topics (`AvroUploadLimiter`: start 4, +1 per round at the limit, half on a throttled upload at
     most once a second, cap `avro-file.upload.max-concurrency`, 16; Ove, 2026-11-19). A store reports throttling of

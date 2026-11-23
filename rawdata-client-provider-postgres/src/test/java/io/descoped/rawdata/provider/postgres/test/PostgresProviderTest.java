@@ -198,30 +198,19 @@ class PostgresProviderTest {
     }
 
     /**
-     * A writer that recovers publishes its last message again, with the same id: it is a no-op, also from a new client
-     * after a restart, and also repeated within one call; the rest of the call is written.
+     * A message published again adds no rows, its content neither; the contract (the TCK) checks what a reader sees.
      *
      * @throws Exception if the database fails
      */
     @Test
-    void publishingAMessageAgainWritesItOnce() throws Exception {
+    void aRepeatedMessageAddsNoRows() throws Exception {
         String topic = topic();
         UUID id = RawdataIds.next(RawdataIds.beginningOfTime());
         RawdataMessage message = RawdataMessage.builder().id(id).position("tx").orderingGroup("g").sequenceNumber(7)
                 .put("a", new byte[]{1, 2}).put("b", new byte[]{3}).build();
         try (RawdataClient client = client(); RawdataProducer producer = client.producer(topic)) {
             producer.publish(message);
-            producer.publish(message);
-            producer.publish(RawdataMessage.builder().position("next").build());
-        }
-        try (RawdataClient client = client(); RawdataProducer producer = client.producer(topic)) {
-            producer.publish(message, RawdataMessage.builder().position("after restart").build(), message);
-            RawdataMessage changed = RawdataMessage.builder().id(id).position("tx").orderingGroup("g").sequenceNumber(7)
-                    .put("a", new byte[]{1, 2}).put("b", new byte[]{4}).build();
-            assertThrows(RawdataException.class, () -> producer.publish(changed), "other content under a stored id is refused");
-            RawdataMessage reordered = RawdataMessage.builder().id(id).position("tx").orderingGroup("g").sequenceNumber(7)
-                    .put("b", new byte[]{3}).put("a", new byte[]{1, 2}).build();
-            assertThrows(RawdataException.class, () -> producer.publish(reordered), "content in another order is another message");
+            producer.publish(message, RawdataMessage.builder().position("next").build(), message);
         }
         try (Connection connection = Postgres18.connect();
              PreparedStatement select = connection.prepareStatement(
@@ -230,24 +219,9 @@ class PostgresProviderTest {
             select.setString(2, topic);
             try (ResultSet rows = select.executeQuery()) {
                 assertTrue(rows.next());
-                assertEquals(3, rows.getLong(1), "tx, next and after restart");
+                assertEquals(2, rows.getLong(1), "tx and next");
                 assertEquals(2, rows.getLong(2));
             }
-        }
-    }
-
-    /**
-     * Two different messages with one id in one call are refused, and nothing of the call is written.
-     */
-    @Test
-    void twoDifferentMessagesWithOneIdInACallAreRefused() {
-        String topic = topic();
-        UUID id = RawdataIds.next(RawdataIds.beginningOfTime());
-        try (RawdataClient client = client(); RawdataProducer producer = client.producer(topic)) {
-            RawdataMessage one = RawdataMessage.builder().id(id).position("one").build();
-            RawdataMessage two = RawdataMessage.builder().id(id).position("two").build();
-            assertThrows(RawdataException.class, () -> producer.publish(one, two));
-            assertNull(client.lastMessage(topic));
         }
     }
 

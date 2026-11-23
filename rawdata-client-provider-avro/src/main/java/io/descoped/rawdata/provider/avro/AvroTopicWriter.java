@@ -1,8 +1,11 @@
 package io.descoped.rawdata.provider.avro;
 
+import io.descoped.rawdata.api.RawdataDuplicateIdException;
 import io.descoped.rawdata.api.RawdataException;
+import io.descoped.rawdata.api.RawdataIds;
 import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.RawdataWriterConflictException;
+import io.descoped.rawdata.api.spi.RawdataDuplicates;
 import org.apache.avro.file.DataFileWriter;
 import org.apache.avro.generic.GenericRecord;
 
@@ -17,9 +20,13 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
@@ -43,6 +50,10 @@ import java.util.stream.Stream;
  * <b>One writer.</b> The writer starts from the topic's end. A segment number that is taken when a window opens or
  * uploads means another process wrote the topic: the writer fails with {@link RawdataWriterConflictException}, its
  * windows are set aside ({@code .invalid}, never deleted) and every later publish fails.
+ * <p>
+ * <b>Unique ids.</b> A given id at or below the topic's greatest id is looked up before the call is written: in the
+ * open window and the windows waiting for upload (a digest per message, dropped once uploaded) and in the uploaded
+ * segments ({@link AvroTakenIds}). The same message again is left out; a different one is refused.
  * <p>
  * <b>Failures.</b> An upload that fails after the store's retries fails the writer: every later publish, flush and
  * close throws, and the sealed windows stay on disk.
@@ -77,9 +88,11 @@ final class AvroTopicWriter {
     // guarded by appendLock
     private AvroRawdataClient.Tail tail; // the last segment this writer created or sealed
     private Window current;
+    private final AvroTakenIds takenIds;
 
     // guarded by this
     private final Deque<Sealed> pending = new ArrayDeque<>();
+    private long uploadedThrough = -1; // the last segment uploaded
     private boolean uploading;
     private RuntimeException failure;
     private boolean failureReported;
@@ -99,6 +112,7 @@ final class AvroTopicWriter {
         long previousBlockStart; // where the block before it starts
         boolean torn; // a write failed in the middle of a call: only the forced blocks may be kept
         ScheduledFuture<?> timer;
+        final Map<UUID, byte[]> digests = new HashMap<>(); // the window's messages by id, for the unique-id check
 
         Window(Path file, long segment, UUID previousId, FileOutputStream out, DataFileWriter<GenericRecord> writer) {
             this.file = file;
@@ -109,7 +123,7 @@ final class AvroTopicWriter {
         }
     }
 
-    private record Sealed(Path file, long segment, UUID lastId) {
+    private record Sealed(Path file, long segment, UUID lastId, Map<UUID, byte[]> digests) {
     }
 
     private AvroTopicWriter(AvroRawdataClient client, String topic, AvroUploadWindow settings, Path folder,
@@ -122,6 +136,7 @@ final class AvroTopicWriter {
         this.lockChannel = lockChannel;
         this.folderLock = folderLock;
         this.appendLock = client.publishLock(topic);
+        this.takenIds = new AvroTakenIds(client, topic);
     }
 
     /**
@@ -191,11 +206,12 @@ final class AvroTopicWriter {
                 openWindow();
             }
             Window window = current;
-            List<RawdataMessage> stored = withIds.apply(window.lastId);
+            List<RawdataMessage> stored = notTaken(withIds.apply(window.lastId), window);
             append(window, stored);
             for (RawdataMessage message : stored) {
                 window.firstId = window.firstId == null ? message.id() : AvroSegments.lowest(window.firstId, message.id());
                 window.lastId = AvroSegments.greatest(window.lastId, message.id());
+                window.digests.put(message.id(), AvroTakenIds.digest(message));
             }
             window.count += stored.size();
             if (window.blockBytes >= settings.syncInterval()) {
@@ -209,6 +225,59 @@ final class AvroTopicWriter {
         } finally {
             appendLock.unlock();
         }
+    }
+
+    /**
+     * Leaves out the messages already in the topic: an id is unique within a topic, so the same message again is not
+     * written twice, also within the call, and a different message under a taken id is refused, writing nothing. Only
+     * an id at or below the topic's greatest id can be taken; it is looked up in the open window, the windows waiting
+     * for upload and the uploaded segments.
+     *
+     * @throws RawdataDuplicateIdException if a message differs from the one under its id
+     */
+    private List<RawdataMessage> notTaken(List<RawdataMessage> messages, Window window) {
+        Map<UUID, RawdataMessage> fresh = RawdataDuplicates.distinct(topic, messages);
+        Iterator<RawdataMessage> each = fresh.values().iterator();
+        while (each.hasNext()) {
+            RawdataMessage message = each.next();
+            if (RawdataIds.ORDER.compare(message.id(), window.lastId) > 0) {
+                continue; // after the topic's greatest id: not taken
+            }
+            Optional<byte[]> taken = takenDigest(message.id(), window);
+            if (taken.isPresent()) {
+                if (!Arrays.equals(taken.get(), AvroTakenIds.digest(message))) {
+                    throw new RawdataDuplicateIdException(topic, message.id());
+                }
+                each.remove(); // written before
+            }
+        }
+        return fresh.size() == messages.size() ? messages : new ArrayList<>(fresh.values());
+    }
+
+    /**
+     * The digest of the message under an id in the topic, if it is taken. A window is in {@code pending} until its segment is
+     * uploaded, so a window that uploads meanwhile is found in one or the other.
+     */
+    private Optional<byte[]> takenDigest(UUID id, Window window) {
+        byte[] digest = window.digests.get(id);
+        if (digest != null) {
+            return Optional.of(digest);
+        }
+        List<Map<UUID, byte[]>> waiting = new ArrayList<>();
+        long uploaded;
+        synchronized (this) {
+            for (Sealed sealed : pending) {
+                waiting.add(sealed.digests());
+            }
+            uploaded = uploadedThrough;
+        }
+        for (Map<UUID, byte[]> digests : waiting) {
+            digest = digests.get(id);
+            if (digest != null) {
+                return Optional.of(digest);
+            }
+        }
+        return takenIds.find(id, uploaded);
     }
 
     private static void append(Window window, List<RawdataMessage> stored) throws IOException {
@@ -413,7 +482,7 @@ final class AvroTopicWriter {
         Path sealed = folder.resolve(name(window.segment) + SEALED_SUFFIX);
         Files.move(window.file, sealed, StandardCopyOption.ATOMIC_MOVE);
         tail = new AvroRawdataClient.Tail(window.segment, window.lastId);
-        enqueue(new Sealed(sealed, window.segment, window.lastId));
+        enqueue(new Sealed(sealed, window.segment, window.lastId, window.digests));
     }
 
     private synchronized void enqueue(Sealed sealed) {
@@ -470,6 +539,7 @@ final class AvroTopicWriter {
             }
             synchronized (this) {
                 pending.pollFirst();
+                uploadedThrough = next.segment();
                 notifyAll();
             }
             client.uploaded(topic, new AvroRawdataClient.Tail(next.segment(), next.lastId()));
@@ -615,6 +685,9 @@ final class AvroTopicWriter {
         }
         if (conflict) {
             throw new RawdataWriterConflictException(topic);
+        }
+        synchronized (this) {
+            uploadedThrough = tail.segment();
         }
     }
 

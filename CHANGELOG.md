@@ -1,12 +1,19 @@
 # Changelog
 
-## 3.0.2
+## 3.1.0
 
-- `postgres`: publishing a message again is a no-op. A message whose given id is already in the topic, with the same
-  position, ordering group, sequence number and content, is not written twice, and the rest of the call is written; a
-  message repeated within one call is written once. A writer that recovers, such as a saga repeating its last step,
-  can publish its last message again. 3.0.1 refused it through the primary key. A different message under a stored
-  id is still refused with `RawdataException`, and nothing of the call is written.
+- An id is unique within a topic, in every provider, and the TCK checks it. Publishing the same message again (the
+  same id, position, ordering group, sequence number, and content keys and bytes in the same order) is a no-op, also
+  within one call: a writer that recovers, such as a saga repeating its last step, or a copy run again, writes nothing
+  twice. A different message under an id that is taken is refused with the new `RawdataDuplicateIdException` (a
+  `RawdataException` with the topic and the id), and nothing of the call is written. Before, `memory` replaced the
+  message, `postgres` refused even the same message through its primary key, and `filesystem`, `gcs` and `s3` stored
+  both, so consumers read the id twice.
+- `filesystem`, `gcs` and `s3` look up a given id at or below the topic's greatest id: in the windows not yet uploaded
+  and in the segments that may hold it. Ids above it, and generated ids, are not looked up. Every appended message is
+  hashed (SHA-256 of its position, ordering fields and content), and the digests of the windows not yet uploaded are
+  kept in memory, about 150 bytes per message.
+- `io.descoped.rawdata.api.spi.RawdataDuplicates`: the rule for providers, `same` and `distinct`.
 
 ## 3.0.1
 

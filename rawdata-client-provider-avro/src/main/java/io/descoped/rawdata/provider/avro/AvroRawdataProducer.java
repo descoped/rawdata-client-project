@@ -9,8 +9,9 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Appends a call's messages to its topic's upload window ({@link AvroTopicWriter}); they are visible once the window
- * is uploaded. Ids are given after the last id of the window, and given ids are checked against it. A call is written
- * whole into one window, or not at all. Another process writing the topic makes publishes fail with
+ * is uploaded. Ids are given after the greatest id of the topic; a given id is kept, and one already taken is checked
+ * (the same message again is a no-op, a different one is refused). A call is written whole into one window, or not at
+ * all. Another process writing the topic makes publishes fail with
  * {@link RawdataWriterConflictException}. Closing the producer uploads the open window and waits, as in 2.x.
  */
 final class AvroRawdataProducer extends OrderedRawdataProducer {

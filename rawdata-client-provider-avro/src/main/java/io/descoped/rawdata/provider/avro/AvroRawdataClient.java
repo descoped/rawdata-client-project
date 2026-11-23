@@ -332,7 +332,7 @@ public final class AvroRawdataClient implements RawdataClient {
     /**
      * Opens a segment that exists, as every segment up to the last one seen does.
      */
-    private AvroSegmentReader existing(String topic, long segment) {
+    AvroSegmentReader existing(String topic, long segment) {
         AvroSegmentReader reader = reader(topic, segment);
         if (reader == null) {
             throw new RawdataException("Segment " + segment + " of topic " + topic
@@ -344,7 +344,7 @@ public final class AvroRawdataClient implements RawdataClient {
     /**
      * The summary of a segment that exists, from its header alone.
      */
-    private AvroSegments.Summary summaryOf(String topic, long segment) {
+    AvroSegments.Summary summaryOf(String topic, long segment) {
         try {
             return existing(topic, segment).summary();
         } catch (IOException e) {

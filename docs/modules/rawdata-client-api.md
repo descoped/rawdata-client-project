@@ -186,8 +186,9 @@ ids.sort(Comparator.naturalOrder());   // wrong for ids: UUID.compareTo is signe
 
 - An id the producer assigns is greater than every id already in the topic, also when several messages are made in
   one millisecond and when the clock moves back (see [`RawdataIds.next`](#how-ids-are-assigned)).
-- An id you give is kept as it is, in any order, as in 2.x: it may be lower than ids already in the topic. Ids must
-  be unique; `memory` replaces a message with the same id.
+- An id you give is kept as it is, in any order, as in 2.x: it may be lower than ids already in the topic.
+- An id is unique within a topic. The same message published again is a no-op; a different message under a taken id
+  is refused with `RawdataDuplicateIdException` (see [Ids and order](../contract.md#ids-and-order)).
 
 A consumer of a topic that is still written may miss a message whose id lands behind its position. A completed
 topic, read from the beginning, gives every message once (see [Ids and order](../contract.md#ids-and-order)).
@@ -444,6 +445,7 @@ module pages.
 | `RawdataClosedException` | any use of a client, producer, consumer or metadata client after it, or its client, was closed |
 | `RawdataNoSuchPositionException` | `cursorOf` or `consumer` by position finds no message with the position in the time range |
 | `RawdataWriterConflictException` | a publish finds that another process wrote the topic since this client last wrote or looked |
+| `RawdataDuplicateIdException` | a publish gives an id that is taken, in the topic or earlier in the call, by a different message |
 | `ProviderException` | no provider, or more than one, has the configured name, or one has no `@ProviderName` |
 | `IllegalStateException` | `RawdataIds.next` is given the greatest UUIDv7 there is |
 
@@ -678,6 +680,8 @@ All unchecked, in `io.descoped.rawdata.api`:
   - [`RawdataNoSuchPositionException`](../../rawdata-client-api/src/main/java/io/descoped/rawdata/api/RawdataNoSuchPositionException.java)
   - [`RawdataWriterConflictException`](../../rawdata-client-api/src/main/java/io/descoped/rawdata/api/RawdataWriterConflictException.java),
     with `String topic()`
+  - [`RawdataDuplicateIdException`](../../rawdata-client-api/src/main/java/io/descoped/rawdata/api/RawdataDuplicateIdException.java),
+    with `String topic()` and `UUID id()`
 
 ### `RawdataClientInitializer`
 
@@ -705,7 +709,7 @@ with `RawdataClosedException`).
 |---|---|
 | `protected OrderedRawdataProducer(String topic)` | |
 | `protected abstract void write(RawdataMessage[] batch)` | write the call, all or none, after everything in the topic |
-| `protected final List<RawdataMessage> withIds(RawdataMessage[] batch, UUID last)` | assigns ids after `last` and checks given ones |
+| `protected final List<RawdataMessage> withIds(RawdataMessage[] batch, UUID last)` | assigns ids after `last` and keeps given ones |
 | `protected abstract boolean isClientClosed()` | |
 | `protected abstract Executor executor()` | for `publishAsync` |
 | `protected void closed()` | called once at close |
@@ -725,6 +729,14 @@ that fails after the client closed is reported as `RawdataClosedException`.
 | `protected abstract Executor executor()` | for `receiveAsync` |
 | `protected void closed()` | called once at close, before waiting receives are woken |
 | `public final void wake()` | wakes waiting receives; never blocks |
+
+[`RawdataDuplicates`](../../rawdata-client-api/src/main/java/io/descoped/rawdata/api/spi/RawdataDuplicates.java): the
+unique-id rule, for every provider that takes given ids.
+
+| Member | |
+|---|---|
+| `public static boolean same(RawdataMessage a, RawdataMessage b)` | the same id, position, ordering group, sequence number, and content keys in order with the same bytes |
+| `public static Map<UUID, RawdataMessage> distinct(String topic, List<RawdataMessage> messages)` | a call's messages by id, a repeat left out; `RawdataDuplicateIdException` for two different ones |
 
 See [writing a provider](../writing-a-provider.md) for how to use them.
 

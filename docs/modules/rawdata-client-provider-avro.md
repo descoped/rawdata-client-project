@@ -185,8 +185,8 @@ written before 3.1.0 may hold an id twice; the first is the one compared.
 What it costs:
 
 - A message given with its id is hashed, outside the publish lock; a message with a generated id is not. The ids of
-  the open window and the windows waiting for upload stay in memory, about 80 bytes per message, plus the 32-byte
-  digest of a given one.
+  the open window and the windows waiting for upload stay in memory, about 80 bytes per message, plus about 50 bytes
+  for the digest of a given one.
 - The first lookup reads the header of every segment from the first that may hold the id to the last, one ranged
   read each; the headers are kept.
 - The writer streams a segment that may hold the id, in ranges as a consumer does, and keeps its ids and digests.

@@ -48,6 +48,7 @@ class AvroTopicWriterTest {
         final Map<String, byte[]> segments = new ConcurrentHashMap<>();
         final CountDownLatch release = new CountDownLatch(1);
         final CountDownLatch uploading = new CountDownLatch(1);
+        final CountDownLatch stored = new CountDownLatch(1); // a segment was put
         volatile Outcome outcome = Outcome.CREATE;
         volatile boolean gated;
         volatile boolean gatedAfterCreate; // the segment is stored, the upload not yet done
@@ -69,11 +70,12 @@ class AvroTopicWriterTest {
                 case TAKEN:
                     return false;
                 default:
-                    byte[] stored = segments.putIfAbsent(topic + "/" + segment, content.clone());
+                    byte[] before = segments.putIfAbsent(topic + "/" + segment, content.clone());
+                    stored.countDown();
                     if (gatedAfterCreate) {
                         await(release);
                     }
-                    return stored == null || Arrays.equals(stored, content);
+                    return before == null || Arrays.equals(before, content);
             }
         }
 
@@ -163,7 +165,7 @@ class AvroTopicWriterTest {
         try (AvroRawdataClient client = client(store, 4000, 4)) {
             RawdataProducer producer = client.producer("t");
             producer.publish(message("large", 5000)); // over the size: sealed, uploaded, the upload not yet done
-            assertTrue(store.uploading.await(10, TimeUnit.SECONDS));
+            assertTrue(store.stored.await(10, TimeUnit.SECONDS));
             RawdataMessage seen = client.lastMessage("t");
             assertEquals("large", seen.position());
             producer.publish(seen);

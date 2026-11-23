@@ -268,7 +268,7 @@ A subclass may add its own `@BeforeAll` or `@AfterAll`, for example to remove te
 
 ### What `RawdataClientContractTest` covers
 
-53 test methods, one of them parameterised over 11 invalid topic names. The groups, in the order of the source:
+54 test methods, one of them parameterised over 11 invalid topic names. The groups, in the order of the source:
 
 | Area | What is checked |
 |---|---|

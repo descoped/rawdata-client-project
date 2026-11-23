@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -501,6 +502,7 @@ public abstract class RawdataClientContractTest {
             producer.publish(read);
             producer.publish(read.get(1), read.get(0));
         }
+        awaitPublished(client, topic);
         try (RawdataConsumer consumer = client.consumer(topic)) {
             assertEquals(List.of("a", "b"), readAll(consumer));
         }
@@ -520,6 +522,7 @@ public abstract class RawdataClientContractTest {
                     () -> producer.publish(RawdataMessage.builder().id(generated).position("other").build()));
             assertEquals(generated, refused.id());
         }
+        awaitPublished(client, topic);
         try (RawdataConsumer consumer = client.consumer(topic)) {
             assertEquals(List.of("a"), readAll(consumer));
         }
@@ -572,6 +575,7 @@ public abstract class RawdataClientContractTest {
             List<String> read = readAll(consumer);
             assertEquals(2, read.size(), "each id once: " + read);
             assertTrue(read.contains("same"));
+            assertTrue(read.stream().anyMatch(position -> position.matches("p[0-7]")), "one of the different messages: " + read);
         }
     }
 
@@ -588,8 +592,11 @@ public abstract class RawdataClientContractTest {
             CompletableFuture<Void> future = producer.publishAsync(message("b"),
                     RawdataMessage.builder().id(id).position("other").build());
             ExecutionException failed = assertThrows(ExecutionException.class, () -> future.get(30, TimeUnit.SECONDS));
-            assertTrue(failed.getCause() instanceof RawdataDuplicateIdException, String.valueOf(failed.getCause()));
+            RawdataDuplicateIdException refused = assertInstanceOf(RawdataDuplicateIdException.class, failed.getCause());
+            assertEquals(id, refused.id());
+            assertEquals(topic, refused.topic());
         }
+        awaitPublished(client, topic);
         try (RawdataConsumer consumer = client.consumer(topic)) {
             assertEquals(List.of("a"), readAll(consumer));
         }
@@ -611,6 +618,7 @@ public abstract class RawdataClientContractTest {
                 assertEquals(20, RawdataCopy.copy(from, to, 6, Duration.ZERO));
             }
         }
+        awaitPublished(client, target);
         try (RawdataConsumer source = client.consumer(topic); RawdataConsumer copy = client.consumer(target)) {
             assertEquals(readAll(source), readAll(copy));
         }

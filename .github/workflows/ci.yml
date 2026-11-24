@@ -86,8 +86,8 @@ jobs:
   # across repositories: on a push to master (X.Y.Z-SNAPSHOT) and on a run by hand (X.Y.Z-<branch>-SNAPSHOT on a
   # branch other than master, so it never replaces master's). Never on a pull request or a tag. The role is taken
   # through GitHub's OIDC token: no secret. The deploy names the target with -DaltSnapshotDeploymentRepository, which
-  # takes SNAPSHOTs only, and the POM has no distributionManagement, so a release version has nowhere to go; the guard
-  # below refuses one before anything is uploaded.
+  # takes SNAPSHOTs only, and the POM has no distributionManagement, so a release version has nowhere to go. The
+  # release plugin's release commit is one on master: the job then skips the deploy, and takes no credentials.
   snapshot:
     name: Publish SNAPSHOTs
     needs: build
@@ -125,16 +125,18 @@ jobs:
             -DnewVersion="${version%-SNAPSHOT}-${name}-SNAPSHOT"
 
       - name: Only a SNAPSHOT
+        id: version
         run: |
           version=$(./mvnw -q help:evaluate -Dexpression=project.version -DforceStdout)
           case "$version" in
-            *-SNAPSHOT) echo "Publishing $version" ;;
-            *) echo "Not a SNAPSHOT: $version"; exit 1 ;;
+            *-SNAPSHOT) echo "Publishing $version"; echo "snapshot=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::notice::Not a SNAPSHOT, nothing to publish: $version"; echo "snapshot=false" >> "$GITHUB_OUTPUT" ;;
           esac
 
       # Last before the deploy, so no other step runs while the role's credentials exist. They are not exported to
       # the job's environment: only the deploy step gets them, for at most 15 minutes.
       - id: aws
+        if: steps.version.outputs.snapshot == 'true'
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
         with:
           role-to-assume: ${{ secrets.CODEARTIFACT_SNAPSHOTS_ROLE_ARN }}
@@ -147,6 +149,7 @@ jobs:
       # account is the role's own and the publishing endpoint is looked up here, so neither is in a public file; both
       # are masked in the log. The role's ARN is an organization secret.
       - name: Deploy
+        if: steps.version.outputs.snapshot == 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
           AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}

@@ -157,7 +157,9 @@ forward from it.
 
 The **topic writer** (`AvroTopicWriter`) is the upload window of one topic in one client. It is started when the
 client's first producer of the topic is created: it takes the folder lock, recovers what a crash left, and starts
-from the topic's tail, before `producer` returns. `lastMessage` read after that holds everything the topic will hold. From then on, each window becomes the segment after the last one the writer sealed.
+from the topic's tail, before `producer` returns. `lastMessage` read after that holds everything the topic will hold.
+`producer` can therefore take as long as uploading what a crash left (one window per leftover, through the store's
+retries), and holds the topic's publish lock meanwhile: do not create producers on a latency-sensitive thread. From then on, each window becomes the segment after the last one the writer sealed.
 
 ### One writer per topic
 

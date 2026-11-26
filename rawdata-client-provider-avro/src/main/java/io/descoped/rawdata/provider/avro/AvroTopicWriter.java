@@ -60,12 +60,12 @@ import java.util.stream.Stream;
  * <b>Failures.</b> An upload that fails after the store's retries fails the writer: every later publish, flush and
  * close throws, and the sealed windows stay on disk.
  * <p>
- * <b>Recovery.</b> When the writer starts (when the client's first producer of the topic is created), it takes a lock file in the topic's folder (one process per folder) and
- * looks for windows a crash left behind. A sealed window is uploaded unchanged, or, if the store already has it with
- * the same bytes, removed. An open window is cut back to its complete blocks and uploaded. A leftover is uploaded only
- * where it belongs: right after the topic's end, after the id it was written after. Otherwise it is set aside as
- * {@code .invalid}, as 2.x left its temporary files, and the writer fails fast with
- * {@link RawdataWriterConflictException}; the next writer starts from the topic's end.
+ * <b>Recovery.</b> When the writer starts (when the client's first producer of the topic is created), it takes a lock
+ * file in the topic's folder (one process per folder) and looks for windows a crash left behind. A sealed window is
+ * uploaded unchanged, or, if the store already has it with the same bytes, removed. An open window is cut back to its
+ * complete blocks and uploaded. A leftover is uploaded only where it belongs: right after the topic's end, after the id
+ * it was written after. Otherwise it is set aside as {@code .invalid}, as 2.x left its temporary files, and the writer
+ * fails fast with {@link RawdataWriterConflictException}; the next writer starts from the topic's end.
  */
 final class AvroTopicWriter {
 
@@ -452,7 +452,7 @@ final class AvroTopicWriter {
     }
 
     /**
-     * Writes the block being filled and forces it to disk, so a crash loses at most the calls after it.
+     * Writes the block being filled and forces it to disk, so the calls in it survive a crash of the process.
      */
     private static void endBlock(Window window) throws IOException {
         window.previousBlockStart = window.blockStart;

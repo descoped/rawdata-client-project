@@ -165,8 +165,10 @@ public interface RawdataClient extends AutoCloseable {
 
     /**
      * Reads the last message of a topic: the last one a consumer reading the whole topic gets. With ids published in
-     * increasing order, the one with the greatest id. It is exact once this client has a producer of the topic (see
-     * {@link #producer}); before that, a provider that buffers may not yet hold what a crash left behind.
+     * increasing order, the one with the greatest id. Once this client has a producer of the topic (see
+     * {@link #producer}), it holds everything published to the topic before that producer was created, also by a
+     * process that crashed; before that, a provider that buffers may not yet hold what a crash left behind. What this
+     * client publishes afterwards is included once it is visible, which depends on the provider.
      *
      * @param topic the topic
      * @return the last message, or null if the topic is empty

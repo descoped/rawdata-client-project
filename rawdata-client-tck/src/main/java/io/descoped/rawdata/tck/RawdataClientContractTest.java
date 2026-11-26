@@ -130,6 +130,17 @@ public abstract class RawdataClientContractTest {
     }
 
     /**
+     * The configuration of a process that is about to crash: it must keep what it publishes to itself until the crash,
+     * so that the restarted process finds it where the crash left it. {@link #configuration()} by default; a provider
+     * that uploads in the background on a timer gives one whose timer does not fire during the test.
+     *
+     * @return the configuration of the crashing process
+     */
+    protected Map<String, String> crashingConfiguration() {
+        return configuration();
+    }
+
+    /**
      * The configuration of the process that starts after a crash of the process configured with {@code crashed},
      * whose client is left unclosed. A provider with no local state gives {@link #configuration()}, the default. A
      * provider with local state gives a new one with a copy of what the crashed process left on its disk (the upload
@@ -954,7 +965,7 @@ public abstract class RawdataClientContractTest {
     @Test
     public void aReturnedPublishSurvivesACrashAndLastMessageHoldsItOnceAProducerExists() throws InterruptedException {
         assumeTrue(clientsShareTheStore(), "the provider keeps a store per client");
-        Map<String, String> crashedConfiguration = configuration();
+        Map<String, String> crashedConfiguration = crashingConfiguration();
         RawdataClient crashed = RawdataClient.create(crashedConfiguration);
         try {
             RawdataProducer producer = crashed.producer(topic);

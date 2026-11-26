@@ -391,7 +391,8 @@ dynamic-configuration means an application can pass `config.asMap()` or a `confi
 
 **What.** Only one process writes a topic. In that process any number of producers of its client may publish;
 consumers may be anywhere. If a second process publishes anyway, the provider notices: a client remembers where it
-last wrote a topic (before its first publish, where the topic ended), and a publish that finds more after that point
+last wrote a topic (before it first writes, where the topic ended: in postgres at its first publish, in the Avro
+providers when its first producer of the topic is created), and a publish that finds more after that point
 throws `RawdataWriterConflictException`, which names the topic (`topic()`). The client then keeps failing for that
 topic, so two writers never merge into one stream. A new client, created after the other writer stopped, starts from
 the topic's current end.
@@ -691,7 +692,7 @@ else writes the target topic.
 | AIMD | additive increase, multiplicative decrease: how a client adapts its concurrent uploads | [Throttling and AIMD](#throttling-and-aimd) |
 | `AvroRawdataClient` | the Avro engine's client, shared by `filesystem`, `gcs` and `s3` | [Avro engine](modules/rawdata-client-provider-avro.md) |
 | `AvroStore` | the backend interface a provider on the Avro engine implements | [Avro engine: the store](modules/rawdata-client-provider-avro.md#the-store-avrostore) |
-| block | an Avro block in a window, forced to disk when it ends; a crash loses at most one | [The upload window](#the-upload-window) |
+| block | an Avro block in a window: one per publish call, forced to disk before the call returns | [The upload window](#the-upload-window) |
 | BOM | `rawdata-client-bom`, which pins the version of every rawdata library module | [BOM](modules/rawdata-client-bom.md) |
 | checkpoint | a metadata entry holding the id of the last message a consumer handled | [Metadata](#metadata) |
 | client | `RawdataClient`, a connection to one store | [Client](#client) |

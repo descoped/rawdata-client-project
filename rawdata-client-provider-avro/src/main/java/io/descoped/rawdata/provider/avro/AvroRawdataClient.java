@@ -35,10 +35,10 @@ import java.util.concurrent.locks.ReentrantLock;
  * the window is uploaded. The segments of a topic are numbered without gaps, and a consumer reads a topic segment by
  * segment, polling for the next.
  * <p>
- * Only one process writes a topic. When this client first publishes to a topic it reads where the topic ends; after
- * that it uploads each window as the segment after the last, and the store creates a segment only if it does not
- * exist. If it does, another process wrote the topic: the client fails with {@link RawdataWriterConflictException}
- * and keeps failing to publish to the topic.
+ * Only one process writes a topic. When this client creates its first producer of a topic it reads where the topic
+ * ends, after recovering what a crash left; after that it uploads each window as the segment after the last, and the
+ * store creates a segment only if it does not exist. If it does, another process wrote the topic: the client fails with
+ * {@link RawdataWriterConflictException} and keeps failing to publish to the topic.
  * <p>
  * Closing a producer uploads its topic's open window and waits for the uploads; closing the client does that for
  * every topic. That is how an application shuts down gracefully, for example on SIGTERM.

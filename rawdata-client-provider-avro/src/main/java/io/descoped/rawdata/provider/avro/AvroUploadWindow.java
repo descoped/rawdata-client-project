@@ -6,9 +6,10 @@ import java.util.Objects;
 
 /**
  * How a producer buffers before it uploads, configured with the 2.x keys. A producer appends to an Avro file in the
- * local folder, one Avro block per publish call, forced to disk before the call returns, and closes the window when it is {@code maxSeconds} old or
- * larger than {@code maxBytes}. A closed window is uploaded in the background as the topic's next segment, while
- * the producer goes on in a new window, and its messages are visible once the upload is done.
+ * local folder, one Avro block per publish call, forced to disk before the call returns, and closes the window when it
+ * is {@code maxSeconds} old or larger than {@code maxBytes}. A closed window is uploaded in the background as the
+ * topic's next segment, while the producer goes on in a new window, and its messages are visible once the upload is
+ * done.
  * <p>
  * There are no values that suit every deployment: tune them to the message rate, the message size and how soon
  * consumers need the messages.

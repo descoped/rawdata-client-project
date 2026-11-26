@@ -278,7 +278,7 @@ A subclass may add its own `@BeforeAll` or `@AfterAll`, for example to remove te
 | Consumers | two consumers read independently; `receiveUpTo` returns at most the number asked for and continues where it stopped |
 | Starting points | after or at a position, after or at an id; a position is found with a tolerance of zero; an unknown position throws `RawdataNoSuchPositionException`; `seek` moves to the first message at or after a time, among many publishes too |
 | Metadata | entries are written, listed, read, replaced and removed, and every metadata client of the topic sees them; values are copied in and out; a key is any string without NUL (case, `""`, `..`, `/` mean nothing special); a key at the provider's limit works and one byte over is refused by `put`, `get` and `remove` |
-| A crash of the writing process | five publishes, one call each, by a client never closed; a client restarted from `afterCrash` creates its producer, and `lastMessage` is the last returned publish; its next publish follows, and readers get every returned publish once, in order (skipped where clients do not share a store) |
+| A crash of the writing process | five publishes, one call each, by a client from `crashingConfiguration` never closed; a client restarted from `afterCrash` creates its producer, and `lastMessage` is the last returned publish; its next publish follows, and readers get every returned publish once, in order (skipped where clients do not share a store) |
 | One writer, several clients | a second writer makes the first fail with `RawdataWriterConflictException`, naming the topic, and the first keeps failing while the topic stays whole; a new writer continues after the last message; a consumer of another client sees what is published; a refused batch writes nothing |
 | A missing store | fails with `RawdataException` at creation or on use, never reads as empty |
 | Topic names | names that differ only by case are two topics; invalid names are refused by every method that takes a topic; names at the edges of the rule (1 character, 100 characters, `.`, `_`, `-`) work |
@@ -306,7 +306,8 @@ sequenceDiagram
 ```
 
 A provider passes only if it detects the other writer the same way the others do: the client remembers where it last
-wrote the topic (or where the topic ended before its first publish), and a publish that finds more after that point
+wrote the topic (or where the topic ended before it first wrote: at its first publish, or, in the Avro providers, when
+its first producer of the topic was created), and a publish that finds more after that point
 fails and writes nothing.
 
 ### What `AvroClientContractTest` adds
@@ -351,6 +352,7 @@ On `RawdataClientContractTest` (and so on `AvroClientContractTest`):
 | `boolean clientsShareTheStore()` | `true` | whether two clients from `configuration()` see the same data; false only when each client has its own store (`memory`), and the four tests with a second client are then skipped |
 | `OptionalInt metadataKeyLimit(String topic)` | `OptionalInt.empty()` (no limit) | the longest metadata key in UTF-8 bytes, as the provider documents it; at least 127 |
 | `Map<String, String> missingStoreConfiguration()` | `null` (test skipped) | a client on a store that does not exist |
+| `Map<String, String> crashingConfiguration()` | `configuration()` | the configuration of the process that crashes in the crash test; it must keep what it publishes until the crash. `AvroClientContractTest` sets `avro-file.max.seconds=3600`, so its timer never uploads during the test and recovery from disk is what is checked |
 | `Map<String, String> afterCrash(Map<String, String> crashed)` | `configuration()` | the configuration of the process restarted after a crash of the one configured with `crashed`, its client left unclosed; `AvroClientContractTest` gives a new `configuration()` with a copy of the topic's buffer folder (not its `.lock`), as a process restarted on the same disk finds it |
 | `void awaitPublished(RawdataClient client, String topic)` | does nothing | waits until what `client` published to `topic` is visible and durable; `AvroClientContractTest` calls `AvroRawdataClient.flush(topic)` and a provider on the engine does not override it |
 

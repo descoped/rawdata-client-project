@@ -49,6 +49,15 @@ public abstract class AvroClientContractTest extends RawdataClientContractTest {
     }
 
     /**
+     * {@link #configuration()} with windows that stay open for an hour, so the crashing writer's timer never uploads
+     * during the test and the restarted writer recovers the window from disk.
+     */
+    @Override
+    protected Map<String, String> crashingConfiguration() {
+        return with(AvroUploadWindow.MAX_SECONDS, "3600");
+    }
+
+    /**
      * A new configuration whose buffer folder holds a copy of the topic's buffer folder in {@code crashed}, as a
      * process restarted on the same disk finds it; the crashed process's folder lock is not copied.
      */

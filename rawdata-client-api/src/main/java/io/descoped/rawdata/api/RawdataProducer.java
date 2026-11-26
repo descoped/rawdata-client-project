@@ -40,8 +40,9 @@ public interface RawdataProducer extends AutoCloseable {
      * {@link RawdataDuplicateIdException}, and nothing of the call is written.
      * <p>
      * When the call returns, its messages survive a crash of the process: the next producer of the topic finds them
-     * (a provider that buffers on a local disk needs that disk to outlive the process). They need not be visible to consumers yet; when they are depends on the provider. The
-     * {@code memory} provider keeps nothing past its process.
+     * (a provider that buffers on a local disk needs that disk to outlive the process). They need not be visible to
+     * consumers yet; when they are depends on the provider. The {@code memory} provider keeps nothing past its
+     * process.
      *
      * @param messages the messages
      * @throws RawdataClosedException      if the producer or its client is closed

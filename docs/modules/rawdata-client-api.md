@@ -204,7 +204,8 @@ several producers on a topic: the client keeps them in one order.
 
 **Only one process writes a topic.** Within that process, any number of producers of its client may publish. Consumers
 may be anywhere. If a second process publishes to the topic anyway, the provider notices: a client remembers where it
-last wrote a topic (before its first publish, where the topic ended), and a publish that finds more after that point
+last wrote a topic (before it first writes, where the topic ended: in postgres at its first publish, in the Avro
+providers when its first producer of the topic is created), and a publish that finds more after that point
 throws `RawdataWriterConflictException`, which names the topic. From then on that client keeps failing to publish to
 the topic, so two writers never merge into one stream. A new client, created after the other writer stopped, starts
 from the topic's current end.

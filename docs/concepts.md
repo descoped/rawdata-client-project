@@ -481,8 +481,9 @@ A window file's name shows its state, in `local-temp-folder/<topic folder>/`:
 | `*.invalid` | set aside after a writer conflict; never uploaded, never deleted |
 | `.lock` | the writer's lock: one client per buffer folder and topic |
 
-Inside a window, each publish call is one Avro block, forced to disk before the call returns, so a call that returned
-survives a crash of the process. It costs one disk sync per call; publish in batches when that matters.
+Inside a window, a publish call returns once it is forced to disk, so a call that returned survives a crash of the
+process. Calls of several threads, or `publishAsync` calls in flight, share blocks and disk syncs (group commit); a
+single thread that waits for each call pays one sync per call, so publish in batches when that matters.
 
 **Why.** An object per publish would cost a request each, make consumers read millions of small objects, and fill a
 bucket with them. A window turns a stream of small publishes into a few large files, which are cheap to store and fast

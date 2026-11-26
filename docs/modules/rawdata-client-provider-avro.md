@@ -238,9 +238,11 @@ store at once and is visible when it returns.
    the messages without an id a UUIDv7 id after the topic's greatest id, and keeps given ids. It leaves out a message
    already in the topic and refuses a different one under a taken id ([Unique ids](#unique-ids)). It appends the
    whole call to the open window, opening one if there is none. A call always goes into one window whole, never split across two.
-2. **End of block.** The call ends its block: the block is written and forced to disk before `publish` returns. One
-   disk sync per call, so a writer that publishes one message per call is bound by the disk's sync latency; publish
-   in batches if that matters.
+2. **Forced to disk (group commit).** The call releases the publish lock and waits until it is forced to disk, then
+   `publish` returns. One caller at a time forces: it ends the block, which holds every call appended so far, under
+   the lock, and syncs the file after releasing it. Calls appended meanwhile, by other threads or `publishAsync`, are
+   forced together by the next sync, so concurrent calls share blocks and syncs; a single thread waiting for each
+   call pays one sync per call.
 3. **Window closes.** The window is closed (sealed) when, after a call, it is at least `avro-file.max.bytes`; when a
    timer finds it `avro-file.max.seconds` old (so a producer that goes quiet still uploads; a publish to a window
    that old also seals it first); when a producer of the topic closes; or on `flush` and client close. An empty
@@ -363,9 +365,14 @@ messages:
   open window (640 KiB at the default), so a very large interval means a large buffer per topic.
 - **Disk.** Each topic needs room for its open window and up to `avro-file.max.pending-uploads` sealed windows:
   about 5 × 64 MiB per topic at the defaults.
-- **Disk syncs.** Every publish call is forced to disk: about 0.05–0.5 ms on a local SSD, 1–5 ms on network block
-  storage. A writer of one message per call is bound by that; batch calls pay it once. Each call's block also adds
-  about 20 bytes of Avro framing to the segment.
+- **Disk syncs.** A call returns once it is forced to disk: about 0.05–0.5 ms on a local SSD, 1–5 ms on network
+  block storage. One thread that publishes one message per call and waits for each is bound by that; batch calls,
+  several threads or `publishAsync` calls in flight share syncs (group commit). On Linux in Docker, one 1 KiB message
+  per call: about 4,000 calls per second from one thread, 25,000 from 16 threads, 65,000 from 64, and 43,000 from
+  one thread with 64 `publishAsync` calls in flight. Without group commit, every call waiting for its own sync under
+  the lock, it was about 4,000 in each case. Each block adds about 20 bytes of Avro framing to the segment. To measure a
+  disk: `./mvnw -pl rawdata-client-provider-filesystem -am test -Dtest=FilesystemPublishBenchmark
+  -Drawdata.bench=true -Dsurefire.failIfNoSpecifiedTests=false`, with the buffer on that disk.
 
 ## The store: `AvroStore`
 

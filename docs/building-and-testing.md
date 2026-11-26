@@ -35,9 +35,9 @@ The build fails fast on mistakes that are easy to miss:
 |---|---|---|---|
 | `rawdata-client-api` | the API, ids, the spi base classes | module path, test module `io.descoped.rawdata.api.test` | |
 | `rawdata-client-tck` | the contract against `memory` | module path | |
-| `rawdata-client-provider-avro` | none of its own: the engine is tested through `filesystem`, `gcs` and `s3` | | |
+| `rawdata-client-provider-avro` | the engine's internals: the topic writer's failure paths, group commit under concurrency, recovery of sealed windows, ranged reads; its behaviour through `filesystem`, `gcs` and `s3` | class path | |
 | `rawdata-client-provider-postgres` | the contract and the provider's own tests on PostgreSQL 18 (`postgres:18-alpine`) | class path | Docker |
-| `rawdata-client-provider-filesystem` | the contract, the store contract and the provider's tests | class path | |
+| `rawdata-client-provider-filesystem` | the contract, the store contract and the provider's tests; a publish benchmark with `-Drawdata.bench=true` | class path | |
 | `rawdata-client-provider-gcs` | the contract and the provider's tests against `fsouza/fake-gcs-server`; the client and credentials against a local server | class path | Docker |
 | `rawdata-client-provider-s3` | the contract and the provider's tests against `adobe/s3mock`; live tests against real S3 with `-Drawdata.s3.live=true` | class path | Docker (live: AWS credentials) |
 | `rawdata-copy-util` | the tool: arguments, copies, resume, filesystem → postgres | class path | Docker |

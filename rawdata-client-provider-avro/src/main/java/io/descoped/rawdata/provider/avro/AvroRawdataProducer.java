@@ -34,14 +34,18 @@ final class AvroRawdataProducer extends OrderedRawdataProducer {
                 given.put(message, AvroTakenIds.digest(message));
             }
         }
-        ReentrantLock lock = client.publishLock(topic); // producers of this client take turns on a topic
+        ReentrantLock lock = client.publishLock(topic); // producers of this client take turns appending to a topic
+        AvroTopicWriter writer;
+        long ticket;
         lock.lock();
         try {
             checkOpen();
-            client.writer(topic).publish(last -> withIds(batch, last), given);
+            writer = client.writer(topic);
+            ticket = writer.append(last -> withIds(batch, last), given);
         } finally {
             lock.unlock();
         }
+        writer.awaitForced(ticket); // outside the lock: calls of other threads are forced together (group commit)
     }
 
     @Override

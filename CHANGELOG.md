@@ -15,8 +15,13 @@
 - `producer(topic)` on `filesystem`, `gcs` and `s3` can now throw: `RawdataException` when the topic's buffer folder is
   in use by another client or the store fails, and `RawdataWriterConflictException` when a window a crash left no
   longer follows the topic's end. These came from the first `publish` before.
-- Cost in `filesystem`, `gcs` and `s3`: one disk sync per publish call (a writer of one message per call is bound by
-  the disk's sync latency; batch calls pay it once) and about 20 bytes of Avro block framing per call in the segment.
+- Group commit in `filesystem`, `gcs` and `s3`: a call appends under the topic's publish lock, then waits for the disk
+  outside it; one caller at a time syncs, for every call appended so far. Concurrent calls (threads or `publishAsync`)
+  share blocks and syncs: on Linux in Docker, one-message calls per second are about 4,000 from one thread, 25,000
+  from 16 and 65,000 from 64 (about 4,000 in each case if every call synced on its own under the lock). A single
+  thread that waits for each call pays one sync per call. About 20 bytes of Avro block framing per block in the segment. An append that fails halfway through a
+  call now fails the topic's writer, as no call after the last sync may be written with it.
+- `FilesystemPublishBenchmark` (`-Drawdata.bench=true`) measures publish calls per second on a disk.
   The number of segments, requests and when consumers see a message are unchanged. `avro-file.sync.interval` now only
   sizes Avro's block buffer and the blocks of a window rewritten by recovery.
 - The POM names the organisation, Descoped (https://descoped.io).

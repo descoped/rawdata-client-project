@@ -3,6 +3,7 @@ package io.descoped.rawdata.provider.avro;
 import io.descoped.rawdata.api.RawdataDuplicateIdException;
 import io.descoped.rawdata.api.RawdataException;
 import io.descoped.rawdata.api.RawdataMessage;
+import io.descoped.rawdata.api.RawdataConsumer;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataWriterConflictException;
 import org.junit.jupiter.api.Test;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +22,9 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
@@ -290,6 +295,200 @@ class AvroTopicWriterTest {
      *
      * @throws Exception if the test fails unexpectedly
      */
+    /**
+     * Group commit: calls of several threads share blocks and disk syncs, and once every call returned, the open window
+     * on disk, read as recovery reads it, holds every message once.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void concurrentPublishesThatReturnedAreAllOnDisk() throws Exception {
+        GatedStore store = new GatedStore();
+        AvroUploadWindow window = new AvroUploadWindow(folder, 3600, 1L << 30, 512 * 1024, 4, 30, 16);
+        int threads = 8;
+        int calls = 200;
+        try (AvroRawdataClient client = new AvroRawdataClient(store, window, 10)) {
+            RawdataProducer producer = client.producer("t");
+            runConcurrently(threads, thread -> {
+                for (int c = 0; c < calls; c++) {
+                    producer.publish(message(thread + "-" + c, 100)); // blocks far below the sync interval
+                }
+            });
+            List<String> positions = leftoverPositions();
+            assertEquals(threads * calls, positions.size(), "every returned call is on disk");
+            assertEquals(threads * calls, new TreeSet<>(positions).size(), "each once");
+        }
+    }
+
+    /**
+     * Group commit while windows seal on size under the callers: a window is sealed and renamed while another caller
+     * forces it. Every message is stored once, and each thread's calls keep their order.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void concurrentPublishesAcrossSealedWindowsAreEachStoredOnceInOrder() throws Exception {
+        GatedStore store = new GatedStore();
+        AvroUploadWindow window = new AvroUploadWindow(folder, 3600, 2048, 512 * 1024, 4, 30, 16);
+        int threads = 8;
+        int calls = 100;
+        try (AvroRawdataClient client = new AvroRawdataClient(store, window, 10)) {
+            RawdataProducer producer = client.producer("t");
+            runConcurrently(threads, thread -> {
+                for (int c = 0; c < calls; c++) {
+                    producer.publish(message(thread + "-" + c, 100));
+                }
+            });
+            client.flush("t");
+            assertTrue(store.segments.size() > 10, "many windows sealed: " + store.segments.size());
+            List<String> read = new ArrayList<>();
+            try (RawdataConsumer consumer = client.consumer("t")) {
+                RawdataMessage message;
+                while ((message = consumer.receive(1, TimeUnit.SECONDS)) != null) {
+                    read.add(message.position());
+                }
+            }
+            assertEquals(threads * calls, read.size(), "every call once");
+            assertEquals(threads * calls, new TreeSet<>(read).size(), "no message twice");
+            for (int t = 0; t < threads; t++) {
+                String prefix = t + "-";
+                List<Integer> order = read.stream().filter(p -> p.startsWith(prefix))
+                        .map(p -> Integer.parseInt(p.substring(prefix.length()))).toList();
+                assertEquals(java.util.stream.IntStream.range(0, calls).boxed().toList(), order, "thread " + t + " in order");
+            }
+        }
+    }
+
+    /**
+     * Calls that repeat messages written by another call at the same time are no-ops that still wait for the disk:
+     * once every call returned, each message is on disk once.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void concurrentRepeatsOfTheSameMessagesAreOnDiskOnce() throws Exception {
+        GatedStore store = new GatedStore();
+        AvroUploadWindow window = new AvroUploadWindow(folder, 3600, 1L << 30, 512 * 1024, 4, 30, 16);
+        List<RawdataMessage> messages = new ArrayList<>();
+        for (int i = 0; i < 50; i++) {
+            messages.add(RawdataMessage.builder().id(io.descoped.rawdata.api.RawdataIds.generate()).position("m" + i)
+                    .put("payload", new byte[]{(byte) i}).build());
+        }
+        try (AvroRawdataClient client = new AvroRawdataClient(store, window, 10)) {
+            RawdataProducer producer = client.producer("t");
+            runConcurrently(8, thread -> {
+                for (RawdataMessage message : messages) {
+                    producer.publish(message);
+                }
+            });
+            List<String> positions = leftoverPositions();
+            assertEquals(50, positions.size(), "each message once: " + positions.size());
+            assertEquals(50, new TreeSet<>(positions).size());
+        }
+    }
+
+    /**
+     * Sealed windows whose uploads a crash cut off are uploaded, in order, when the next process creates its producer,
+     * before {@code producer} returns: {@code lastMessage} holds them before any publish.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void producerUploadsTheSealedWindowsACrashLeftBeforeItReturns() throws Exception {
+        GatedStore store = new GatedStore();
+        store.gated = true;
+        Path crashedFolder = folder.resolve("crashed");
+        Path restartedFolder = folder.resolve("restarted");
+        AvroRawdataClient crashed = new AvroRawdataClient(store,
+                new AvroUploadWindow(crashedFolder, 3600, 1, 64, 4, 1, 16), 10);
+        try {
+            RawdataProducer producer = crashed.producer("t");
+            for (String position : List.of("a", "b", "c")) {
+                producer.publish(message(position, 10)); // each fills its window: sealed, its upload held back
+            }
+            assertTrue(store.uploading.await(10, TimeUnit.SECONDS));
+            Files.createDirectories(restartedFolder.resolve("t"));
+            try (Stream<Path> files = Files.list(crashedFolder.resolve("t"))) {
+                for (Path file : files.filter(f -> !f.getFileName().toString().equals(".lock")).toList()) {
+                    Files.copy(file, restartedFolder.resolve("t").resolve(file.getFileName()));
+                }
+            }
+            store.gated = false; // the crashed process's held upload stays held; the restarted one's go through
+            try (AvroRawdataClient restarted = new AvroRawdataClient(store,
+                    new AvroUploadWindow(restartedFolder, 3600, 1, 64, 4, 30, 16), 10)) {
+                restarted.producer("t");
+                assertEquals("c", restarted.lastMessage("t").position(), "every sealed window, before any publish");
+                assertEquals(Set.of("t/0", "t/1", "t/2"), store.segments.keySet());
+            }
+        } finally {
+            store.release.countDown();
+            try {
+                crashed.close();
+            } catch (RuntimeException e) {
+                // the crashed process never closes
+            }
+        }
+    }
+
+    /**
+     * A call larger than the sync interval ends its block as it is appended; mixed with small calls, every call that
+     * returned is on disk.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void callsLargerThanTheSyncIntervalAndSmallCallsAreAllOnDisk() throws Exception {
+        GatedStore store = new GatedStore();
+        try (AvroRawdataClient client = new AvroRawdataClient(store,
+                new AvroUploadWindow(folder, 3600, 1L << 30, 256, 4, 30, 16), 10)) {
+            RawdataProducer producer = client.producer("t");
+            List<String> published = new ArrayList<>();
+            for (int call = 0; call < 6; call++) {
+                List<RawdataMessage> batch = new ArrayList<>();
+                int size = call % 2 == 0 ? 10 : 1; // ten messages of 100 bytes pass 256; one does not
+                for (int i = 0; i < size; i++) {
+                    batch.add(message("c" + call + "-" + i, 100));
+                    published.add("c" + call + "-" + i);
+                }
+                producer.publish(batch);
+            }
+            assertEquals(published, leftoverPositions());
+        }
+    }
+
+    private List<String> leftoverPositions() throws IOException {
+        List<String> windows = files();
+        assertEquals(1, windows.size(), "one open window: " + windows);
+        AvroSegments.Leftover leftover = AvroSegments.readLeftover(folder.resolve("t").resolve(windows.get(0)));
+        return leftover.messages().stream().map(RawdataMessage::position).toList();
+    }
+
+    private interface Task {
+        void run(int thread) throws Exception;
+    }
+
+    private static void runConcurrently(int threads, Task task) throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<?>> done = new ArrayList<>();
+            for (int t = 0; t < threads; t++) {
+                int thread = t;
+                done.add(executor.submit(() -> {
+                    start.await();
+                    task.run(thread);
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (Future<?> future : done) {
+                future.get(60, TimeUnit.SECONDS);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
     @Test
     void leftoversWithoutMessagesAreRemoved() throws Exception {
         Path topic = Files.createDirectories(folder.resolve("t"));

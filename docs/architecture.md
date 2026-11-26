@@ -95,10 +95,11 @@ segment `n` does not exist, and readers see the whole segment or nothing.
 
 Producers buffer in an [upload window](modules/rawdata-client-provider-avro.md#upload-window) (`AvroTopicWriter`, one
 per topic and client):
-1. A publish appends to the open window, an Avro file in `local-temp-folder`, with ids after the window's last id.
+1. A publish appends to the open window, an Avro file in `local-temp-folder`, with ids after the window's last id, as
+   one block forced to disk before the publish returns.
 2. When the window closes (on time, on size, or when a producer closes), it is forced to disk, sealed, and queued.
-3. A background upload creates it as segment `n + 1`, after the last segment `n` this client created. Before the
-   client's first publish to the topic, `n` is the topic's last segment.
+3. A background upload creates it as segment `n + 1`, after the last segment `n` this client created. When the
+   client's first producer of the topic is created, `n` is the topic's last segment.
 
 If segment `n + 1` exists, another process wrote the topic, and the writer fails with `RawdataWriterConflictException`.
 (A create that finds its own bytes, after a retry whose first response was lost, counts as created.) Segments are thus

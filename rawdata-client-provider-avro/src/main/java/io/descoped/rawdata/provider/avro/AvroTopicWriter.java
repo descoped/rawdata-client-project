@@ -44,7 +44,8 @@ import java.util.stream.Stream;
  * one at a time, in segment order; a publish waits while {@code avro-file.max.pending-uploads} sealed windows wait.
  * <p>
  * <b>Whole calls.</b> An Avro block ends only between publish calls, and is then forced to disk, so a crash leaves
- * whole calls on disk, never part of one. A write that fails in the middle of a call leaves the window as a crash
+ * whole calls on disk, never part of one. Every call ends its block, so a call that returned survives a crash of the
+ * process. A write that fails in the middle of a call leaves the window as a crash
  * would: its complete blocks on disk, for recovery.
  * <p>
  * <b>One writer.</b> The writer starts from the topic's end. A segment number that is taken when a window opens or
@@ -59,7 +60,7 @@ import java.util.stream.Stream;
  * <b>Failures.</b> An upload that fails after the store's retries fails the writer: every later publish, flush and
  * close throws, and the sealed windows stay on disk.
  * <p>
- * <b>Recovery.</b> When the writer starts, it takes a lock file in the topic's folder (one process per folder) and
+ * <b>Recovery.</b> When the writer starts (when the client's first producer of the topic is created), it takes a lock file in the topic's folder (one process per folder) and
  * looks for windows a crash left behind. A sealed window is uploaded unchanged, or, if the store already has it with
  * the same bytes, removed. An open window is cut back to its complete blocks and uploaded. A leftover is uploaded only
  * where it belongs: right after the topic's end, after the id it was written after. Otherwise it is set aside as
@@ -196,8 +197,8 @@ final class AvroTopicWriter {
     // ---- publishing
 
     /**
-     * Appends a call's messages to the open window, opening one if there is none. The call ends its block when the
-     * block is full, so blocks hold whole calls.
+     * Appends a call's messages to the open window, opening one if there is none. The call ends its block and forces
+     * it to disk before it returns, so a block holds one call and a call that returned survives a crash.
      *
      * @param withIds gives the messages without an id an id after the given greatest id
      * @param given   the digests of the messages given with an id, by identity, computed before the lock
@@ -221,8 +222,8 @@ final class AvroTopicWriter {
                 window.digests.put(message.id(), given.getOrDefault(message, NOT_SEEN));
             }
             window.count += stored.size();
-            if (window.blockBytes >= settings.syncInterval()) {
-                endBlock(window);
+            if (window.blockBytes > 0) {
+                endBlock(window); // a call that returns is on disk
             }
             if (window.out.getChannel().size() + window.blockBytes >= settings.maxBytes()) {
                 seal();

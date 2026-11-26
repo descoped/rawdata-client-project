@@ -53,10 +53,15 @@ public interface RawdataClient extends AutoCloseable {
     }
 
     /**
-     * Creates a producer on a topic.
+     * Creates a producer on a topic. Once a client has a producer of a topic, {@link #lastMessage} of the topic holds
+     * everything the topic will hold, also after a crash of the process that wrote it before: a provider that buffers
+     * locally finishes what a crash left before this returns. A writer that resumes after its last message creates
+     * its producer first, then reads where to resume.
      *
      * @param topic the topic
      * @return a producer on the topic
+     * @throws RawdataException if the provider cannot take the topic for writing, for example its local buffer is in
+     *                          use by another client or its store fails
      */
     RawdataProducer producer(String topic);
 
@@ -160,7 +165,8 @@ public interface RawdataClient extends AutoCloseable {
 
     /**
      * Reads the last message of a topic: the last one a consumer reading the whole topic gets. With ids published in
-     * increasing order, the one with the greatest id.
+     * increasing order, the one with the greatest id. It is exact once this client has a producer of the topic (see
+     * {@link #producer}); before that, a provider that buffers may not yet hold what a crash left behind.
      *
      * @param topic the topic
      * @return the last message, or null if the topic is empty

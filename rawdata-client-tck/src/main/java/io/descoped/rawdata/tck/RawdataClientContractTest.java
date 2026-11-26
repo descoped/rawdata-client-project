@@ -130,6 +130,19 @@ public abstract class RawdataClientContractTest {
     }
 
     /**
+     * The configuration of the process that starts after a crash of the process configured with {@code crashed},
+     * whose client is left unclosed. A provider with no local state gives {@link #configuration()}, the default. A
+     * provider with local state gives a new one with a copy of what the crashed process left on its disk (the upload
+     * window's buffer folder), as a process restarted on the same disk finds it.
+     *
+     * @param crashed the configuration of the crashed process
+     * @return the configuration of the restarted process
+     */
+    protected Map<String, String> afterCrash(Map<String, String> crashed) {
+        return configuration();
+    }
+
+    /**
      * Creates the client and a fresh topic name.
      */
     @BeforeEach
@@ -927,6 +940,48 @@ public abstract class RawdataClientContractTest {
         assertThrows(IllegalArgumentException.class, () -> metadata.get(overLimit));
         assertThrows(IllegalArgumentException.class, () -> metadata.remove(overLimit));
         assertEquals(Set.of(atLimit), metadata.keys());
+    }
+
+    // ---- a crash of the writing process
+
+    /**
+     * A publish that returned survives a crash of the process, and once the restarted process has a producer of the
+     * topic, {@code lastMessage} holds it: a writer resumes exactly after its last returned publish. The restarted
+     * writer goes on, and readers get every returned message once, in order.
+     *
+     * @throws InterruptedException if interrupted while waiting
+     */
+    @Test
+    public void aReturnedPublishSurvivesACrashAndLastMessageHoldsItOnceAProducerExists() throws InterruptedException {
+        assumeTrue(clientsShareTheStore(), "the provider keeps a store per client");
+        Map<String, String> crashedConfiguration = configuration();
+        RawdataClient crashed = RawdataClient.create(crashedConfiguration);
+        try {
+            RawdataProducer producer = crashed.producer(topic);
+            List<String> published = new ArrayList<>();
+            for (int i = 0; i < 5; i++) {
+                producer.publish(message("m" + i, 5, 3)); // one call each; the producer and client are never closed
+                published.add("m" + i);
+            }
+            try (RawdataClient restarted = RawdataClient.create(afterCrash(crashedConfiguration))) {
+                RawdataProducer next = restarted.producer(topic);
+                RawdataMessage last = restarted.lastMessage(topic);
+                assertNotNull(last, "the returned publishes survived");
+                assertEquals("m4", last.position(), "exact once a producer exists");
+                next.publish(message("after", 5));
+                awaitPublished(restarted, topic);
+                published.add("after");
+                try (RawdataConsumer consumer = client.consumer(topic)) {
+                    assertEquals(published, readAll(consumer), "every returned publish once, then the next");
+                }
+            }
+        } finally {
+            try {
+                crashed.close();
+            } catch (RawdataException e) {
+                // A crashed process never closes; closing it now may find its segment taken by the restarted one.
+            }
+        }
     }
 
     // ---- one writer, several clients

@@ -73,7 +73,11 @@ Ids, as in 2.x:
   where the provider puts it: in id order in `memory` and `postgres`, after what was published before it in
   `filesystem`, `gcs` and `s3`.
 - A `publish` call is written whole or not at all.
-- **When published messages are visible and durable depends on the provider.** In `postgres` and `memory`, as soon as
+- **A `publish` that returned survives a crash of the process**, in every provider but `memory`, a test provider whose
+  topics end with its process. The Avro providers need `local-temp-folder` to outlive the process.
+- **Once a client has a producer of a topic, `lastMessage` holds everything the topic will hold**, crash or not: a
+  writer that resumes creates its producer first, then reads `lastMessage`.
+- **When published messages are visible to consumers depends on the provider.** In `postgres` and `memory`, as soon as
   `publish` returns. In `filesystem`, `gcs` and `s3`, once their [upload
   window](modules/rawdata-client-provider-avro.md#upload-window) is uploaded: after `avro-file.max.seconds` or
   `avro-file.max.bytes`, or when the producer or client closes. Closing a producer always makes what it published

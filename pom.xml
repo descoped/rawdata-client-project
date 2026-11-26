@@ -173,6 +173,9 @@
                             <publishingServerId>central</publishingServerId>
                             <autoPublish>false</autoPublish>
                             <waitUntil>validated</waitUntil>
+                            <!-- MD5 and SHA-1 only, the checksums Central requires: SHA-256 and SHA-512 add two files
+                                 per artifact to the namespace's monthly file count. -->
+                            <checksums>required</checksums>
                             <!-- The copy tool is a program, distributed as a zip on GitHub releases. -->
                             <excludeArtifacts>
                                 <excludeArtifact>rawdata-copy-util</excludeArtifact>

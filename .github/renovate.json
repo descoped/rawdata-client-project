@@ -14,6 +14,20 @@
       "automerge": true
     },
     {
+      "description": "claude-code-action changes only claude.yml, which CI does not build, so there is no check to wait for: merged without one, once a week, to the commit the action's v1 tag points to",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDepNames": [
+        "anthropics/claude-code-action"
+      ],
+      "automerge": true,
+      "ignoreTests": true,
+      "schedule": [
+        "before 6am on monday"
+      ]
+    },
+    {
       "description": "JDK versions in the workflows are deliberate: CI and `respond` build on the Java 17 baseline. They are changed by hand, never bumped.",
       "matchManagers": [
         "github-actions"
@@ -62,15 +76,19 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Docker image tags in Java test code and shell scripts (the Testcontainers images and the JPMS smoke test)",
+      "description": "Docker image tags in Java test code and shell scripts (the Testcontainers images and the JPMS smoke test); ignorePaths above replaces config:recommended's, which skips every test folder",
       "managerFilePatterns": [
         "/\\.java$/",
         "/\\.sh$/"
       ],
       "matchStrings": [
-        "(?<depName>postgres|fsouza/fake-gcs-server):(?<currentValue>[0-9][A-Za-z0-9._-]*)"
+        "(?<depName>postgres|fsouza/fake-gcs-server|adobe/s3mock):(?<currentValue>[0-9][A-Za-z0-9._-]*)"
       ],
       "datasourceTemplate": "docker"
     }
+  ],
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/target/**"
   ]
 }

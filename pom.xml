@@ -17,6 +17,11 @@
     <url>https://github.com/descoped/rawdata-client-project</url>
     <inceptionYear>2019</inceptionYear>
 
+    <organization>
+        <name>Descoped</name>
+        <url>https://descoped.io</url>
+    </organization>
+
     <modules>
         <module>rawdata-client-bom</module>
         <module>rawdata-client-api</module>
@@ -69,7 +74,7 @@
             <email>ove.ranheim@gmail.com</email>
             <url>https://www.linkedin.com/in/oranheim/</url>
             <organization>Descoped</organization>
-            <organizationUrl>https://github.com/descoped/</organizationUrl>
+            <organizationUrl>https://descoped.io</organizationUrl>
         </developer>
     </developers>
 

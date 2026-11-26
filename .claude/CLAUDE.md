@@ -48,7 +48,8 @@ this repository.
   and the class path.
 - **Only one process writes a topic** (owner's principle, 2026-11-18). Several producers of that process's client may
   publish; consumers may be anywhere. A provider detects another writer the same way in all of them: a client
-  remembers where it last wrote a topic (before its first publish, where the topic ended); finding more after that
+  remembers where it last wrote a topic (before it first writes, where the topic ended: postgres at its first publish,
+  the Avro providers when its first producer is created); finding more after that
   fails with `RawdataWriterConflictException`. postgres throws from that `publish`, writing nothing. The Avro
   providers find it when a window opens or uploads, so a later `publish`, `flush` or `close` throws, and the windows
   not uploaded are kept as `*.invalid`, never written. Nothing supports or tests several writing processes keeping
@@ -115,14 +116,18 @@ this repository.
     limit for the whole client). They are read with dynamic-configuration's value semantics, from a plain map.
   - **When a window closes:** on time (a timer), on size, or when a producer of the topic closes. It is then forced
     to disk, sealed (`*.sealed.avro`) and uploaded in the background as the next segment while publishes go on.
-  - **Visibility and durability:** a message is visible and durable once its window is uploaded.
+  - **Durability and visibility** (Ove, 2026-11-27, the same in every provider): a publish that returned survives a
+    crash of the process (each call is one Avro block, forced to disk before it returns; `local-temp-folder` must
+    outlive the process), and once a client has a producer of a topic, `lastMessage` holds everything the topic will
+    hold (the topic's writer, with its folder lock and recovery, starts in `producer`). A message is visible, and
+    durable in the store, once its window is uploaded.
   - **Graceful shutdown** is `close()`, as in 2.x's `AutoCloseable` design. There is no shutdown hook.
   - **Segments:** a topic is segments numbered 0, 1, 2… without gaps, each created only if its number is free (a hard
     link on a file system, `ifGenerationMatch=0` on GCS, `If-None-Match: *` on S3). A number already taken means
     another writer: `RawdataWriterConflictException`. A create that finds its own bytes counts as created.
   - **Uploads:** a topic's uploads run one at a time, in order, and a failed upload fails the writer loudly, keeping
     the windows on disk.
-  - **Recovery:** a restarted writer uploads leftover windows only right after the topic's end, a sealed one
+  - **Recovery:** a restarted writer (at its first `producer` of the topic) uploads leftover windows only right after the topic's end, a sealed one
     unchanged and an open one cut back to its complete blocks. Anything else is kept as `*.invalid` and never
     uploaded or deleted.
   - **The schema** is 2.x's (`id`, `orderingGroup`, `sequenceNumber` default 0, `position`, `data` as a map), with the

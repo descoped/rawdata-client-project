@@ -208,7 +208,8 @@ move. A reader sees the old value or the new one, never a mix. Metadata is not p
 ### The buffer folder and its lock file
 
 `local-temp-folder` is where producers buffer their upload windows, one folder per topic, named like the topic folder.
-It must be on a local disk. When a client first publishes to a topic, it opens `<local-temp-folder>/<topic
+It must be on a local disk that outlives the process: a publish that returned is on it until uploaded. When a client
+creates its first producer of a topic, it opens `<local-temp-folder>/<topic
 folder>/.lock` and takes an exclusive lock on it (`FileChannel.tryLock`). It holds the lock until the topic's writer
 closes. A second client that tries to write the same topic from the same buffer folder, in this JVM or another,
 fails with:
@@ -282,7 +283,7 @@ publish(m1, m2)                                   background upload thread
 ```
 
 1. `publish` appends the call's messages to the topic's open window in the buffer folder. A call is always written
-   whole into one window. Each Avro block of `avro-file.sync.interval` bytes is forced to disk as it ends.
+   whole into one window. The call is one Avro block, forced to disk before `publish` returns.
 2. The window closes when it is `avro-file.max.seconds` old, when it reaches `avro-file.max.bytes`, or when a
    producer of the topic closes. It is forced to disk and renamed `.sealed.avro`.
 3. A background thread uploads sealed windows one at a time, in segment order: the store writes the temporary file and
@@ -325,7 +326,7 @@ A consumer reads a topic segment by segment:
    `listing.min-interval-seconds` (1 by default; `0` means as often as `receive` asks, but no more often than every
    10 ms). An upload through the same client wakes its consumers at once.
 
-`lastMessage(topic)` and a writer's first publish find the topic's last segment by probing segment names forward in
+`lastMessage(topic)` and a writer's first producer find the topic's last segment by probing segment names forward in
 growing steps, then halving: a few `exists` checks even for a long topic, since segments have no gaps. The last
 message is then read from that segment's last block.
 
@@ -352,7 +353,7 @@ is an `IllegalArgumentException` that names its key.
 | `listing.min-interval-seconds` | `1` | how often a waiting consumer looks for the next segment, in whole seconds; `0` as often as `receive` asks (at least 10 ms apart) |
 | `avro-file.max.seconds` | `60` | the longest a window stays open before it is uploaded |
 | `avro-file.max.bytes` | `67108864` (64 MiB) | the size at which a window closes |
-| `avro-file.sync.interval` | `524288` (512 KiB) | the size of an Avro block; each block is forced to disk, so a crash loses at most the block being written |
+| `avro-file.sync.interval` | `524288` (512 KiB) | the block size Avro's buffer is sized for; every publish call ends its own block, forced to disk |
 | `avro-file.max.pending-uploads` | `4` | sealed windows that may wait for upload before `publish` waits |
 | `avro-file.close-timeout-seconds` | `30` | the longest `close()` of a producer or the client waits for the uploads |
 | `avro-file.upload.max-concurrency` | `16` | the most uploads of a client at once, across its topics |

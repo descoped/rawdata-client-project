@@ -38,6 +38,11 @@ public interface RawdataProducer extends AutoCloseable {
      * sequence number, and content keys and bytes in the same order) is a no-op, also within one call, so a writer that
      * recovers can repeat its last publish. A different message under an id that is taken is refused with
      * {@link RawdataDuplicateIdException}, and nothing of the call is written.
+     * <p>
+     * When the call returns, its messages survive a crash of the process: the next producer of the topic finds them
+     * (a provider that buffers on a local disk needs that disk to outlive the process). They need not be visible to
+     * consumers yet; when they are depends on the provider. The {@code memory} provider keeps nothing past its
+     * process.
      *
      * @param messages the messages
      * @throws RawdataClosedException      if the producer or its client is closed

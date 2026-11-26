@@ -204,7 +204,8 @@ several producers on a topic: the client keeps them in one order.
 
 **Only one process writes a topic.** Within that process, any number of producers of its client may publish. Consumers
 may be anywhere. If a second process publishes to the topic anyway, the provider notices: a client remembers where it
-last wrote a topic (before its first publish, where the topic ended), and a publish that finds more after that point
+last wrote a topic (before it first writes, where the topic ended: in postgres at its first publish, in the Avro
+providers when its first producer of the topic is created), and a publish that finds more after that point
 throws `RawdataWriterConflictException`, which names the topic. From then on that client keeps failing to publish to
 the topic, so two writers never merge into one stream. A new client, created after the other writer stopped, starts
 from the topic's current end.
@@ -335,14 +336,16 @@ clock.
 
 ### When a message is visible and durable
 
-| Provider | Visible to consumers and durable |
-|---|---|
-| `memory` | when `publish` returns (in this client's memory only; gone at `close`) |
-| `postgres` | when `publish` returns |
-| `filesystem`, `gcs`, `s3` | when the topic's [upload window](rawdata-client-provider-avro.md#upload-window) is uploaded; closing the producer uploads it |
-| `discard` | never: nothing is kept |
+| Provider | Survives a crash of the process | Visible to consumers |
+|---|---|---|
+| `memory` | no (in this client's memory only; gone at `close`) | when `publish` returns |
+| `postgres` | when `publish` returns | when `publish` returns |
+| `filesystem`, `gcs`, `s3` | when `publish` returns (on the local disk) | when the topic's [upload window](rawdata-client-provider-avro.md#upload-window) is uploaded; closing the producer uploads it |
+| `discard` | never: nothing is kept | never |
 
-In every provider, closing a producer makes what it published visible and durable.
+In every provider, closing a producer makes what it published visible and durable in the store. Once a client has a
+producer of a topic, `lastMessage` holds everything the topic will hold, also after a crash: `producer` finishes what
+a crash left before it returns, and can throw `RawdataException` if the topic cannot be taken for writing.
 
 ### How a receive waits
 

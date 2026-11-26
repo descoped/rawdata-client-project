@@ -137,9 +137,10 @@ A window file goes through three states, visible in its name:
 
 ### Block
 
-Inside a window, messages are written in Avro **blocks**. A block ends between two publish calls, once it holds about
-`avro-file.sync.interval` bytes, and is then forced to disk. A block therefore always holds whole calls, and the
-blocks on disk are what survives a crash. The size is the engine's estimate of a message's encoded size (16 bytes of
+Inside a window, messages are written in Avro **blocks**, one per publish call: the call ends its block and forces
+it to disk before it returns. A block therefore holds one whole call, and a call that returned survives a crash of
+the process. `avro-file.sync.interval` sizes Avro's block buffer and the blocks of a window rewritten by recovery;
+the size is the engine's estimate of a message's encoded size (16 bytes of
 id, the position, the ordering group and each content entry's key and bytes), as 2.x estimated it.
 
 ### Header summary
@@ -154,9 +155,11 @@ The **tail** of a topic is its last segment and the topic's greatest id, from th
 an empty topic). The client caches the last tail it saw per topic and finds the current one by probing the store
 forward from it.
 
-The **topic writer** (`AvroTopicWriter`) is the upload window of one topic in one client. It is started by the
-client's first publish to the topic: it takes the folder lock, recovers what a crash left, and starts from the
-topic's tail. From then on, each window becomes the segment after the last one the writer sealed.
+The **topic writer** (`AvroTopicWriter`) is the upload window of one topic in one client. It is started when the
+client's first producer of the topic is created: it takes the folder lock, recovers what a crash left, and starts
+from the topic's tail, before `producer` returns. `lastMessage` read after that holds everything the topic will hold.
+`producer` can therefore take as long as uploading what a crash left (one window per leftover, through the store's
+retries), and holds the topic's publish lock meanwhile: do not create producers on a latency-sensitive thread. From then on, each window becomes the segment after the last one the writer sealed.
 
 ### One writer per topic
 
@@ -235,8 +238,9 @@ store at once and is visible when it returns.
    the messages without an id a UUIDv7 id after the topic's greatest id, and keeps given ids. It leaves out a message
    already in the topic and refuses a different one under a taken id ([Unique ids](#unique-ids)). It appends the
    whole call to the open window, opening one if there is none. A call always goes into one window whole, never split across two.
-2. **End of block.** If the block being filled has reached `avro-file.sync.interval`, the call ends it: the block is
-   written and forced to disk.
+2. **End of block.** The call ends its block: the block is written and forced to disk before `publish` returns. One
+   disk sync per call, so a writer that publishes one message per call is bound by the disk's sync latency; publish
+   in batches if that matters.
 3. **Window closes.** The window is closed (sealed) when, after a call, it is at least `avro-file.max.bytes`; when a
    timer finds it `avro-file.max.seconds` old (so a producer that goes quiet still uploads; a publish to a window
    that old also seals it first); when a producer of the topic closes; or on `flush` and client close. An empty
@@ -254,12 +258,11 @@ store at once and is visible when it returns.
 
 | After | Visible to consumers | Survives a crash of the process |
 |---|---|---|
-| `publish` returns | no | only if its block has ended (forced to disk); the calls since the last block end are lost |
+| `publish` returns | no | yes, on the local disk (its block is forced to disk); the next writer uploads it |
 | the window is sealed | no | yes, on the local disk; the next writer uploads it |
 | the window is uploaded | yes, in every process | yes, in the store |
 
-So a crash of the process loses at most the calls in the block being filled, about `avro-file.sync.interval`
-bytes. A lost disk (an ephemeral container volume, for example) loses everything not yet uploaded: up to
+So a crash of the process loses only a call that had not returned, and that call whole. A lost disk (an ephemeral container volume, for example) loses everything not yet uploaded: up to
 `avro-file.max.seconds` of messages, or more while uploads are failing. Put `local-temp-folder` on storage that
 outlives the process if that matters.
 
@@ -329,7 +332,7 @@ These keys are read by `AvroUploadWindow.of`, the same in `filesystem`, `gcs` an
 | `local-temp-folder` | none, required | where windows are buffered: a local disk, one folder per topic. Made absolute and created if missing. |
 | `avro-file.max.seconds` | `60` | the longest a window stays open, in seconds. Bounds how late a message becomes visible, and how much a lost disk loses. |
 | `avro-file.max.bytes` | `67108864` (64 MiB) | the size at which a window closes, checked after each call; a window exceeds it by at most its last call |
-| `avro-file.sync.interval` | `524288` (512 KiB) | the size of an Avro block, in estimated bytes; what a crash may lose |
+| `avro-file.sync.interval` | `524288` (512 KiB) | the block size Avro's buffer is sized for, and the blocks of a window rewritten by recovery; every publish call still ends its own block |
 | `avro-file.max.pending-uploads` | `4` | sealed windows of a topic that may wait for upload (the one uploading included) before `publish` waits |
 | `avro-file.close-timeout-seconds` | `30` | the longest `producer.close()` or `client.close()` waits for the uploads |
 | `avro-file.upload.max-concurrency` | `16` | the most uploads of a client at once, across its topics; the limit starts at 4 and adapts |
@@ -360,7 +363,9 @@ messages:
   open window (640 KiB at the default), so a very large interval means a large buffer per topic.
 - **Disk.** Each topic needs room for its open window and up to `avro-file.max.pending-uploads` sealed windows:
   about 5 × 64 MiB per topic at the defaults.
-- **Crash loss** is at most a block, `avro-file.sync.interval`. A smaller block forces to disk more often.
+- **Disk syncs.** Every publish call is forced to disk: about 0.05–0.5 ms on a local SSD, 1–5 ms on network block
+  storage. A writer of one message per call is bound by that; batch calls pay it once. Each call's block also adds
+  about 20 bytes of Avro framing to the segment.
 
 ## The store: `AvroStore`
 
@@ -385,7 +390,7 @@ random sync marker, so equal bytes on a retry mean the write was yours.
 - **An upload that fails after the store's retries fails the topic's writer.** Every later `publish`, `flush` and
   `close` of the topic in this client throws `RawdataException` ("The writer of topic … failed: …"), and the sealed
   windows stay on disk, the open one too (sealed). Nothing is lost. Fix the cause, then create a client again: its
-  first publish to the topic uploads them, in order. `close()` throws the failure if no earlier call reported it, or
+  first producer of the topic uploads them, in order. `close()` throws the failure if no earlier call reported it, or
   if windows are left that were not uploaded.
 - **A disk failure** while writing the window fails the writer the same way. If it came in the middle of a call,
   the window is left as a crash would leave it, its complete blocks on disk, and recovery cuts it back.
@@ -412,9 +417,9 @@ random sync marker, so equal bytes on a retry mean the write was yours.
 
 ## Recovery after a crash
 
-Each block of `avro-file.sync.interval` bytes is forced to disk when it ends, so a crash loses at most the block
-being written. When a writer of the topic starts again (on the first publish of a new client), it looks at the
-windows the crash left, in segment order:
+Each publish call is forced to disk before it returns, so a crash loses only a call that had not returned. When a
+writer of the topic starts again (when a new client creates its first producer of the topic, before `producer`
+returns), it looks at the windows the crash left, in segment order:
 
 - A **sealed** window is uploaded unchanged. If the store already has the segment with the same bytes, because the
   crash came after the upload but before the file was removed, the file is removed.
@@ -471,7 +476,7 @@ case-insensitive file systems.
 | Messages are not visible right after `publish` | they are in the open window | wait up to `avro-file.max.seconds`, close the producer, or call `flush(topic)`; lower `avro-file.max.seconds` if latency matters |
 | `publish` blocks for a long time | `avro-file.max.pending-uploads` windows wait for a slow or throttled store | look at the store; raise the key only if the disk has room |
 | `close()` throws "Waiting for the uploads of topic … timed out" | the store did not take the windows within `avro-file.close-timeout-seconds` | nothing is lost: the windows stay in `local-temp-folder` and the next writer uploads them; raise the limit within your platform's grace period |
-| "The writer of topic … failed" | an upload failed after the store's retries | fix the store; create a new client; its first publish uploads what was left |
+| "The writer of topic … failed" | an upload failed after the store's retries | fix the store; create a new client; its first producer of the topic uploads what was left |
 | `RawdataWriterConflictException` | another process wrote the topic, or a leftover window no longer fits | find and stop the second writer; see [one writer per topic](../contract.md#one-writer-per-topic) |
 | "The buffer folder … is in use by another client" | two clients share a topic's folder in `local-temp-folder` | give each process its own folder |
 | `*.invalid` files in `local-temp-folder` | windows set aside after a conflict | look at them with any Avro tool if you need to; delete them when you no longer need them |

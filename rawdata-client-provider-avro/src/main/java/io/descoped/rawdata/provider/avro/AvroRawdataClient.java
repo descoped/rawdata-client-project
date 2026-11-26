@@ -35,10 +35,10 @@ import java.util.concurrent.locks.ReentrantLock;
  * the window is uploaded. The segments of a topic are numbered without gaps, and a consumer reads a topic segment by
  * segment, polling for the next.
  * <p>
- * Only one process writes a topic. When this client first publishes to a topic it reads where the topic ends; after
- * that it uploads each window as the segment after the last, and the store creates a segment only if it does not
- * exist. If it does, another process wrote the topic: the client fails with {@link RawdataWriterConflictException}
- * and keeps failing to publish to the topic.
+ * Only one process writes a topic. When this client creates its first producer of a topic it reads where the topic
+ * ends, after recovering what a crash left; after that it uploads each window as the segment after the last, and the
+ * store creates a segment only if it does not exist. If it does, another process wrote the topic: the client fails with
+ * {@link RawdataWriterConflictException} and keeps failing to publish to the topic.
  * <p>
  * Closing a producer uploads its topic's open window and waits for the uploads; closing the client does that for
  * every topic. That is how an application shuts down gracefully, for example on SIGTERM.
@@ -95,9 +95,27 @@ public final class AvroRawdataClient implements RawdataClient {
         store.onThrottled(limiter::throttled);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The topic's writer starts here: it takes the topic's buffer folder and uploads what a crash left there before
+     * this returns, so {@link #lastMessage} read afterwards holds everything the topic will hold.
+     *
+     * @throws RawdataException if the buffer folder is in use by another client, or recovery fails
+     * @throws io.descoped.rawdata.api.RawdataWriterConflictException if a window a crash left no longer follows the
+     *                                                                topic's end (it is set aside)
+     */
     @Override
     public RawdataProducer producer(String topic) {
-        AvroRawdataProducer producer = new AvroRawdataProducer(this, checked(topic));
+        String name = checked(topic);
+        ReentrantLock lock = publishLock(name);
+        lock.lock();
+        try {
+            writer(name);
+        } finally {
+            lock.unlock();
+        }
+        AvroRawdataProducer producer = new AvroRawdataProducer(this, name);
         open.add(producer);
         return producer;
     }
@@ -235,7 +253,8 @@ public final class AvroRawdataClient implements RawdataClient {
     }
 
     /**
-     * The writer of a topic, started on the first publish. Called with the topic's publish lock held.
+     * The writer of a topic, started when the first producer of the topic is created. Called with the topic's publish
+     * lock held.
      */
     AvroTopicWriter writer(String topic) {
         AvroTopicWriter writer = writers.computeIfAbsent(topic, t -> {

@@ -68,7 +68,7 @@ recognises it in the store by its bytes.
 
 **A publish, flush or close throws "The writer of topic … failed".** An upload failed after the store's retries, for
 example during an outage. The windows not uploaded stay in `local-temp-folder`, sealed. Fix the cause, then create a
-client again: its first publish to the topic uploads them, in order. See
+client again: its first producer of the topic uploads them, in order. See
 [Avro engine: failures](modules/rawdata-client-provider-avro.md#failures).
 
 **"The buffer folder … is in use by another client".** Two clients, in one process or two, use the same

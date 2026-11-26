@@ -6,9 +6,10 @@ import java.util.Objects;
 
 /**
  * How a producer buffers before it uploads, configured with the 2.x keys. A producer appends to an Avro file in the
- * local folder, in blocks of {@code syncInterval} bytes, and closes the window when it is {@code maxSeconds} old or
- * larger than {@code maxBytes}. A closed window is uploaded in the background as the topic's next segment, while
- * the producer goes on in a new window, and its messages are visible once the upload is done.
+ * local folder, one Avro block per publish call, forced to disk before the call returns, and closes the window when it
+ * is {@code maxSeconds} old or larger than {@code maxBytes}. A closed window is uploaded in the background as the
+ * topic's next segment, while the producer goes on in a new window, and its messages are visible once the upload is
+ * done.
  * <p>
  * There are no values that suit every deployment: tune them to the message rate, the message size and how soon
  * consumers need the messages.
@@ -17,8 +18,9 @@ import java.util.Objects;
  *                          required)
  * @param maxSeconds        the longest a window stays open, in seconds ({@value #MAX_SECONDS}, default 60)
  * @param maxBytes          the size at which a window closes ({@value #MAX_BYTES}, default 64 MiB)
- * @param syncInterval      the size of an Avro block in bytes ({@value #SYNC_INTERVAL}, default 512 KiB); a block is
- *                          forced to disk when it is written, so a crash loses at most the block being written
+ * @param syncInterval      the block size, in bytes, that Avro's buffer is sized for and that a crash's leftover is
+ *                          re-encoded in ({@value #SYNC_INTERVAL}, default 512 KiB). Every publish call ends its block
+ *                          and forces it to disk, so a call that returned survives a crash whatever this is
  * @param maxPendingUploads how many closed windows may wait for upload before a publish waits
  *                          ({@value #MAX_PENDING_UPLOADS}, default 4)
  * @param closeTimeoutSeconds the longest closing a producer or the client waits for the uploads, in seconds

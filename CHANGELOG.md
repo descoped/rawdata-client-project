@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.2.0
+
+- Two guarantees in every provider, checked by the TCK (`aReturnedPublishSurvivesACrashAndLastMessageHoldsItOnceAProducerExists`,
+  with the new hook `afterCrash`):
+  - **A `publish` that returned survives a crash of the process.** postgres already committed each call. `filesystem`,
+    `gcs` and `s3` now end every publish call's Avro block and force it to disk before `publish` returns; before, a
+    crash lost the calls in the block being filled (up to `avro-file.sync.interval`, 512 KiB). `local-temp-folder`
+    must outlive the process. `memory` keeps nothing past its process, as before.
+  - **Once a client has a producer of a topic, `lastMessage` holds everything the topic will hold**, crash or not.
+    `filesystem`, `gcs` and `s3` now start the topic's writer in `producer(topic)`: it takes the buffer folder's lock
+    and uploads what a crash left before `producer` returns. Before, that happened at the first publish, so a writer
+    that read `lastMessage` to resume after a crash re-published what recovery then uploaded too.
+- `producer(topic)` on `filesystem`, `gcs` and `s3` can now throw: `RawdataException` when the topic's buffer folder is
+  in use by another client or the store fails, and `RawdataWriterConflictException` when a window a crash left no
+  longer follows the topic's end. These came from the first `publish` before.
+- Cost in `filesystem`, `gcs` and `s3`: one disk sync per publish call (a writer of one message per call is bound by
+  the disk's sync latency; batch calls pay it once) and about 20 bytes of Avro block framing per call in the segment.
+  The number of segments, requests and when consumers see a message are unchanged. `avro-file.sync.interval` now only
+  sizes Avro's block buffer and the blocks of a window rewritten by recovery.
+- The POM names the organisation, Descoped (https://descoped.io).
+
 ## 3.1.0
 
 - An id is unique within a topic, in every provider, and the TCK checks it. Publishing the same message again (the

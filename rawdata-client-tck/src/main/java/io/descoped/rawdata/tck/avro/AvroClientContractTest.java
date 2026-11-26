@@ -13,6 +13,7 @@ import io.descoped.rawdata.tck.RawdataClientContractTest;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -45,6 +46,35 @@ public abstract class AvroClientContractTest extends RawdataClientContractTest {
      * Creates the test; subclasses are instantiated by JUnit.
      */
     protected AvroClientContractTest() {
+    }
+
+    /**
+     * {@link #configuration()} with windows that stay open for an hour, so the crashing writer's timer never uploads
+     * during the test and the restarted writer recovers the window from disk.
+     */
+    @Override
+    protected Map<String, String> crashingConfiguration() {
+        return with(AvroUploadWindow.MAX_SECONDS, "3600");
+    }
+
+    /**
+     * A new configuration whose buffer folder holds a copy of the topic's buffer folder in {@code crashed}, as a
+     * process restarted on the same disk finds it; the crashed process's folder lock is not copied.
+     */
+    @Override
+    protected Map<String, String> afterCrash(Map<String, String> crashed) {
+        Map<String, String> restarted = configuration();
+        Path from = buffer(crashed);
+        Path to = buffer(restarted);
+        try (Stream<Path> files = Files.list(from)) {
+            Files.createDirectories(to);
+            for (Path file : files.filter(f -> !f.getFileName().toString().equals(".lock")).toList()) {
+                Files.copy(file, to.resolve(file.getFileName()));
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return restarted;
     }
 
     @Override
@@ -228,11 +258,10 @@ public abstract class AvroClientContractTest extends RawdataClientContractTest {
             awaitPublished(lost, topic); // the topic goes on without the restarted writer: the leftover no longer fits
 
             try (RawdataClient writer = RawdataClient.create(restarted)) {
-                RawdataProducer next = writer.producer(topic);
-                RawdataMessage after = message("after");
-                assertThrows(RawdataWriterConflictException.class, () -> next.publish(after));
+                assertThrows(RawdataWriterConflictException.class, () -> writer.producer(topic));
                 assertTrue(Files.exists(copy.resolveSibling(copy.getFileName() + ".invalid")), "kept, set aside");
-                next.publish(after);
+                RawdataProducer next = writer.producer(topic);
+                next.publish(message("after"));
                 awaitPublished(writer, topic);
             }
             assertEquals("after", client.lastMessage(topic).position());
@@ -240,16 +269,14 @@ public abstract class AvroClientContractTest extends RawdataClientContractTest {
     }
 
     /**
-     * Only one client at a time may use a topic's buffer folder.
+     * Only one client at a time may use a topic's buffer folder: a second is refused when it creates its producer.
      */
     @Test
     public void aBufferFolderIsUsedByOneClient() {
         Map<String, String> shared = with(AvroUploadWindow.MAX_SECONDS, "3600");
         try (RawdataClient first = RawdataClient.create(shared); RawdataClient second = RawdataClient.create(shared)) {
-            first.producer(topic).publish(message("a"));
-            RawdataProducer producer = second.producer(topic);
-            RawdataMessage b = message("b");
-            RawdataException refused = assertThrows(RawdataException.class, () -> producer.publish(b));
+            first.producer(topic);
+            RawdataException refused = assertThrows(RawdataException.class, () -> second.producer(topic));
             assertTrue(refused.getMessage().contains("in use"), refused.getMessage());
         }
     }

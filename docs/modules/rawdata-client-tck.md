@@ -268,7 +268,7 @@ A subclass may add its own `@BeforeAll` or `@AfterAll`, for example to remove te
 
 ### What `RawdataClientContractTest` covers
 
-54 test methods, one of them parameterised over 11 invalid topic names. The groups, in the order of the source:
+55 test methods, one of them parameterised over 11 invalid topic names. The groups, in the order of the source:
 
 | Area | What is checked |
 |---|---|
@@ -278,6 +278,7 @@ A subclass may add its own `@BeforeAll` or `@AfterAll`, for example to remove te
 | Consumers | two consumers read independently; `receiveUpTo` returns at most the number asked for and continues where it stopped |
 | Starting points | after or at a position, after or at an id; a position is found with a tolerance of zero; an unknown position throws `RawdataNoSuchPositionException`; `seek` moves to the first message at or after a time, among many publishes too |
 | Metadata | entries are written, listed, read, replaced and removed, and every metadata client of the topic sees them; values are copied in and out; a key is any string without NUL (case, `""`, `..`, `/` mean nothing special); a key at the provider's limit works and one byte over is refused by `put`, `get` and `remove` |
+| A crash of the writing process | five publishes, one call each, by a client from `crashingConfiguration` never closed; a client restarted from `afterCrash` creates its producer, and `lastMessage` is the last returned publish; its next publish follows, and readers get every returned publish once, in order (skipped where clients do not share a store) |
 | One writer, several clients | a second writer makes the first fail with `RawdataWriterConflictException`, naming the topic, and the first keeps failing while the topic stays whole; a new writer continues after the last message; a consumer of another client sees what is published; a refused batch writes nothing |
 | A missing store | fails with `RawdataException` at creation or on use, never reads as empty |
 | Topic names | names that differ only by case are two topics; invalid names are refused by every method that takes a topic; names at the edges of the rule (1 character, 100 characters, `.`, `_`, `-`) work |
@@ -305,7 +306,8 @@ sequenceDiagram
 ```
 
 A provider passes only if it detects the other writer the same way the others do: the client remembers where it last
-wrote the topic (or where the topic ended before its first publish), and a publish that finds more after that point
+wrote the topic (or where the topic ended before it first wrote: at its first publish, or, in the Avro providers, when
+its first producer of the topic was created), and a publish that finds more after that point
 fails and writes nothing.
 
 ### What `AvroClientContractTest` adds
@@ -322,12 +324,13 @@ and eight more about the upload window. Each of these creates its own writer cli
 | `closingTheProducerUploadsTheOpenWindow` | `avro-file.max.seconds=3600` | closing a producer uploads its open window and waits |
 | `manyPublishesInOneWindowAreReadInOrder` | `avro-file.max.seconds=3600` | 20 publishes of 25 messages in one window are read back in order |
 | `aWindowACrashLeftIsUploadedWhenTheWriterStartsAgain` | `avro-file.sync.interval=64` for the crashed writer | crash recovery, below |
-| `aLeftWindowThatNoLongerFitsIsSetAside` | `avro-file.sync.interval=64` for the crashed writer | a leftover that no longer follows the topic's end is renamed `*.invalid`, the publish fails once with `RawdataWriterConflictException`, and the next publish goes on |
-| `aBufferFolderIsUsedByOneClient` | both clients get the same `local-temp-folder` | a second client on the same buffer folder is refused with a `RawdataException` whose message says the folder is in use |
+| `aLeftWindowThatNoLongerFitsIsSetAside` | `avro-file.sync.interval=64` for the crashed writer | a leftover that no longer follows the topic's end is renamed `*.invalid`, `producer` fails once with `RawdataWriterConflictException`, and the next `producer` goes on |
+| `aBufferFolderIsUsedByOneClient` | both clients get the same `local-temp-folder` | a second client on the same buffer folder is refused at `producer` with a `RawdataException` whose message says the folder is in use |
 
 The crash recovery test does not kill a process. It publishes 20 calls of three messages each with small Avro
 blocks, copies the open window file (`*.window.avro`) from the crashed writer's buffer folder into a new folder, and
-appends seven bytes, a torn block. A new writer on that folder then publishes once. The test checks that readers see
+appends seven bytes, a torn block. A new writer on that folder then creates its producer, which recovers the window,
+and publishes once. The test checks that readers see
 a prefix of what was published, in order and without gaps, made of whole publish calls only (a multiple of three
 messages), followed by the new message; and that the crashed writer, still running, can no longer write the topic.
 
@@ -346,9 +349,11 @@ On `RawdataClientContractTest` (and so on `AvroClientContractTest`):
 | Hook | Default | Meaning |
 |---|---|---|
 | `Map<String, String> configuration()` | none, abstract | a client of the provider on the test store, including `rawdata.client.provider`. Each call is another process: the same store, its own local state |
-| `boolean clientsShareTheStore()` | `true` | whether two clients from `configuration()` see the same data; false only when each client has its own store (`memory`), and the three second-client tests are then skipped |
+| `boolean clientsShareTheStore()` | `true` | whether two clients from `configuration()` see the same data; false only when each client has its own store (`memory`), and the four tests with a second client are then skipped |
 | `OptionalInt metadataKeyLimit(String topic)` | `OptionalInt.empty()` (no limit) | the longest metadata key in UTF-8 bytes, as the provider documents it; at least 127 |
 | `Map<String, String> missingStoreConfiguration()` | `null` (test skipped) | a client on a store that does not exist |
+| `Map<String, String> crashingConfiguration()` | `configuration()` | the configuration of the process that crashes in the crash test; it must keep what it publishes until the crash. `AvroClientContractTest` sets `avro-file.max.seconds=3600`, so its timer never uploads during the test and recovery from disk is what is checked |
+| `Map<String, String> afterCrash(Map<String, String> crashed)` | `configuration()` | the configuration of the process restarted after a crash of the one configured with `crashed`, its client left unclosed; `AvroClientContractTest` gives a new `configuration()` with a copy of the topic's buffer folder (not its `.lock`), as a process restarted on the same disk finds it |
 | `void awaitPublished(RawdataClient client, String topic)` | does nothing | waits until what `client` published to `topic` is visible and durable; `AvroClientContractTest` calls `AvroRawdataClient.flush(topic)` and a provider on the engine does not override it |
 
 On `AvroStoreContractTest`:
@@ -379,7 +384,7 @@ configuration](rawdata-client-provider-avro.md#configuration) and in
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Every test fails in `createClient` with no provider found | the provider is not registered, or not on the test's class or module path | register it with `provides` in `module-info.java` and in `META-INF/services/io.descoped.rawdata.api.RawdataClientInitializer` |
-| The three second-client tests are skipped | `clientsShareTheStore()` returns false | return false only if each client really has its own store |
+| The four tests with a second client are skipped | `clientsShareTheStore()` returns false | return false only if each client really has its own store |
 | `aStoreThatDoesNotExistFails` is skipped | `missingStoreConfiguration()` returns null | give a store that cannot exist; if the provider creates missing folders, point it at a folder inside a regular file |
 | `aStoreThatDoesNotExistFails` fails on an assertion | a missing store reads as empty | throw `RawdataException` (or `IOException` from an `AvroStore`) when the database, bucket or folder is missing |
 | `aMetadataKeyOverTheProvidersLimitIsRefused` fails with "below the portable length" | the declared limit is under 127 bytes | the store must take keys of at least `PORTABLE_KEY_BYTES` |

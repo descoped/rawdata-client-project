@@ -203,29 +203,42 @@ public final class AvroRawdataClient implements RawdataClient {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        RawdataException failed = null;
-        long end = System.nanoTime() + closeTimeoutNanos(); // one limit for the whole close, not one per topic
-        for (AvroTopicWriter writer : writers.values()) {
-            try {
-                writer.close(Math.max(0, end - System.nanoTime()));
-            } catch (RawdataException e) {
-                failed = failed == null ? e : failed;
+        RuntimeException failed = null; // the first failure is thrown, the others are suppressed in it
+        try {
+            long end = System.nanoTime() + closeTimeoutNanos(); // one limit for the whole close, not one per topic
+            for (AvroTopicWriter writer : writers.values()) {
+                try {
+                    writer.close(Math.max(0, end - System.nanoTime()));
+                } catch (RuntimeException e) {
+                    failed = first(failed, e);
+                }
             }
-        }
-        writers.clear();
-        for (Object producerOrConsumer : open) {
-            if (producerOrConsumer instanceof AvroRawdataProducer producer) {
-                producer.close();
-            } else if (producerOrConsumer instanceof AvroRawdataConsumer consumer) {
-                consumer.close();
+            writers.clear();
+            for (Object producerOrConsumer : open) {
+                if (producerOrConsumer instanceof AvroRawdataProducer producer) {
+                    producer.close();
+                } else if (producerOrConsumer instanceof AvroRawdataConsumer consumer) {
+                    consumer.close();
+                }
             }
+        } catch (RuntimeException e) {
+            failed = first(failed, e);
+        } finally {
+            scheduler.shutdownNow();
+            executor.shutdownNow();
+            store.close(); // whatever failed before: the threads stop and the store's resources are released
         }
-        scheduler.shutdownNow();
-        executor.shutdownNow();
-        store.close();
         if (failed != null) {
             throw failed;
         }
+    }
+
+    private static RuntimeException first(RuntimeException failed, RuntimeException e) {
+        if (failed == null) {
+            return e;
+        }
+        failed.addSuppressed(e);
+        return failed;
     }
 
     // ---- for the producers, consumers and metadata clients

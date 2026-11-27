@@ -22,6 +22,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -30,6 +31,7 @@ import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -48,7 +50,7 @@ class AvroTopicWriterTest {
      */
     static final class GatedStore implements AvroStore {
 
-        enum Outcome { CREATE, FAIL, TAKEN }
+        enum Outcome { CREATE, FAIL, ERROR, TAKEN }
 
         final Map<String, byte[]> segments = new ConcurrentHashMap<>();
         final CountDownLatch release = new CountDownLatch(1);
@@ -75,6 +77,8 @@ class AvroTopicWriterTest {
             switch (outcome) {
                 case FAIL:
                     throw new IOException("the store is down");
+                case ERROR:
+                    throw new OutOfMemoryError("test: no memory for the upload");
                 case TAKEN:
                     return false;
                 default:
@@ -194,6 +198,32 @@ class AvroTopicWriterTest {
             client.flush("t");
             assertEquals(1, store.segments.size(), "nothing more was written");
         }
+    }
+
+    /**
+     * An upload that fails with an {@link Error} (out of memory) fails the writer: a flush waiting for the upload
+     * returns with the failure instead of waiting for ever, and later publishes fail.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void anErrorInAnUploadFailsTheWriterAndWakesTheWaiters() throws Exception {
+        GatedStore store = new GatedStore();
+        store.outcome = GatedStore.Outcome.ERROR;
+        AvroRawdataClient client = client(store, 4000, 4);
+        RawdataProducer producer = client.producer("t");
+        producer.publish(message("large", 5000)); // over the size: sealed and uploaded
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> flushed = executor.submit(() -> client.flush("t"));
+            ExecutionException failed = assertThrows(ExecutionException.class, () -> flushed.get(10, TimeUnit.SECONDS));
+            assertInstanceOf(RawdataException.class, failed.getCause());
+            assertThrows(RawdataException.class, () -> producer.publish(message("after", 1)));
+        } finally {
+            executor.shutdownNow();
+        }
+        assertThrows(RawdataException.class, client::close);
+        assertEquals(List.of("0000000000000000000.sealed.avro"), files(), "kept for the next writer");
     }
 
     /**

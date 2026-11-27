@@ -269,6 +269,38 @@ class SpiBaseClassesTest {
         }
     }
 
+    /**
+     * An {@link Error} from a read completes the asynchronous receive with it, so no caller waits for ever.
+     */
+    @Test
+    void anErrorInAnAsynchronousReceiveCompletesItsFuture() {
+        QueueConsumer consumer = new QueueConsumer(10) {
+            @Override
+            protected void fill(Deque<RawdataMessage> buffer) {
+                throw new AssertionError("test: a broken read");
+            }
+        };
+        ExecutionException failed = assertThrows(ExecutionException.class,
+                () -> consumer.receiveAsync().get(10, TimeUnit.SECONDS));
+        assertInstanceOf(AssertionError.class, failed.getCause());
+    }
+
+    /**
+     * Closing the consumer fails an asynchronous receive whose task never ran, as when the client's executor drops
+     * its queued tasks on close.
+     */
+    @Test
+    void closingFailsAnAsynchronousReceiveWhoseTaskNeverRan() {
+        QueueConsumer consumer = new QueueConsumer(10);
+        List<Runnable> queued = new ArrayList<>();
+        consumer.asyncExecutor = queued::add; // never runs them
+        CompletableFuture<RawdataMessage> received = consumer.receiveAsync();
+        consumer.close();
+        ExecutionException failed = assertThrows(ExecutionException.class, () -> received.get(10, TimeUnit.SECONDS));
+        assertInstanceOf(RawdataClosedException.class, failed.getCause());
+        assertEquals(1, queued.size());
+    }
+
     private static void await(CountDownLatch latch) {
         try {
             if (!latch.await(10, TimeUnit.SECONDS)) {

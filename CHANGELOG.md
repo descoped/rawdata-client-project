@@ -47,7 +47,9 @@
   the TCK checks it (`aCancelledOrTimedOutAsynchronousReceiveLosesNoMessage`). Before, the receive behind it went on,
   took the next message and dropped it, and held a thread of the client until a message came (as in 2.x). The future
   is now completed while the consumer's turn is held, so a message taken for a future that is done meanwhile goes back
-  to the head of the buffer; a dependent that is not async runs then too.
+  to the head of the buffer; a dependent that is not async runs then too, so it must not wait for another receive of
+  the same consumer. Closing a consumer fails its outstanding `receiveAsync`, also one whose task had not started
+  when the client stopped its threads.
 - The POM names the organisation, Descoped (https://descoped.io).
 
 ## 3.1.0

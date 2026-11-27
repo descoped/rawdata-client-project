@@ -12,6 +12,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -32,6 +33,7 @@ public abstract class PollingRawdataConsumer implements RawdataConsumer {
     private final Object signal = new Object();
     private final ReentrantLock turn = new ReentrantLock();
     private final Deque<RawdataMessage> buffer = new ArrayDeque<>(); // guarded by turn
+    private final AtomicReference<CompletableFuture<RawdataMessage>> pending = new AtomicReference<>(); // receiveAsync
 
     /**
      * Creates the consumer.
@@ -155,14 +157,20 @@ public abstract class PollingRawdataConsumer implements RawdataConsumer {
      * <p>
      * The future is completed while this consumer's turn is held, so a message taken for a future that was cancelled
      * or timed out meanwhile goes back to the head of the buffer, and the next receive gets it. A dependent that is
-     * not async runs then too, before the next receive of this consumer: give long work to an async dependent. A
-     * cancelled or timed-out receive stops waiting at once and frees its thread.
+     * not async runs then too, before the next receive of this consumer: give long work to an async dependent, and
+     * never wait in one for another receive of this consumer (that receive needs the turn). A cancelled or timed-out
+     * receive stops waiting at once and frees its thread; closing the consumer fails it.
      */
     @Override
     public final CompletableFuture<RawdataMessage> receiveAsync() {
         checkOpen();
         CompletableFuture<RawdataMessage> result = new CompletableFuture<>();
         result.whenComplete((message, failure) -> wake()); // a cancelled or timed-out receive stops waiting
+        pending.set(result); // failed by close, also before its task runs
+        if (isClosed()) {
+            result.completeExceptionally(closedException()); // closed meanwhile
+            return result;
+        }
         try {
             executor().execute(() -> receiveInto(result));
         } catch (RejectedExecutionException e) {
@@ -200,6 +208,9 @@ public abstract class PollingRawdataConsumer implements RawdataConsumer {
             result.completeExceptionally(isClosed() ? closedException() : e);
         } catch (RuntimeException e) {
             result.completeExceptionally(e);
+        } catch (Error e) { // NOSONAR: the task's entry point; the caller's future gets the Error, which is rethrown
+            result.completeExceptionally(e);
+            throw e;
         }
     }
 
@@ -224,6 +235,10 @@ public abstract class PollingRawdataConsumer implements RawdataConsumer {
     public final void close() {
         if (closed.compareAndSet(false, true)) {
             closed();
+            CompletableFuture<RawdataMessage> outstanding = pending.getAndSet(null);
+            if (outstanding != null) {
+                outstanding.completeExceptionally(closedException()); // also one whose task never ran
+            }
             wake();
         }
     }

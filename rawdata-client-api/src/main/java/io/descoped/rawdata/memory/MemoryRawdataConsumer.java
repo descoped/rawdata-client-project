@@ -19,6 +19,7 @@ final class MemoryRawdataConsumer implements RawdataConsumer {
     private final AtomicReference<MemoryCursor> position;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final ReentrantLock turn = new ReentrantLock(); // one take at a time: read the next message, move past it
+    private final AtomicReference<CompletableFuture<RawdataMessage>> pending = new AtomicReference<>(); // receiveAsync
 
     MemoryRawdataConsumer(MemoryRawdataClient client, MemoryRawdataTopic topic, MemoryCursor start) {
         this.client = client;
@@ -58,9 +59,10 @@ final class MemoryRawdataConsumer implements RawdataConsumer {
         turn.lock();
         try {
             checkOpen();
-            RawdataMessage message = topic.next(position.get(), 0, this::isClosed);
+            MemoryCursor cursor = position.get();
+            RawdataMessage message = topic.next(cursor, 0, this::isClosed);
             if (message != null && (into == null || into.complete(message))) {
-                position.set(new MemoryCursor(message.id(), false));
+                position.compareAndSet(cursor, new MemoryCursor(message.id(), false)); // a seek meanwhile wins
             }
             return message;
         } finally {
@@ -73,13 +75,19 @@ final class MemoryRawdataConsumer implements RawdataConsumer {
      * <p>
      * The future is completed while this consumer's turn is held, so a message for a future that was cancelled or
      * timed out meanwhile stays for the next receive. A dependent that is not async runs then too: give long work to
-     * an async dependent. A cancelled or timed-out receive stops waiting at once and frees its thread.
+     * an async dependent, and never wait in one for another receive of this consumer. A cancelled or timed-out
+     * receive stops waiting at once and frees its thread; closing the consumer fails it.
      */
     @Override
     public CompletableFuture<RawdataMessage> receiveAsync() {
         checkOpen();
         CompletableFuture<RawdataMessage> result = new CompletableFuture<>();
         result.whenComplete((message, failure) -> topic.wakeUp()); // a cancelled or timed-out receive stops waiting
+        pending.set(result); // failed by close, also before its task runs
+        if (isClosed()) {
+            result.completeExceptionally(closedException()); // closed meanwhile
+            return result;
+        }
         try {
             client.executor().execute(() -> receiveInto(result));
         } catch (RejectedExecutionException e) {
@@ -100,6 +108,9 @@ final class MemoryRawdataConsumer implements RawdataConsumer {
             result.completeExceptionally(isClosed() ? closedException() : e);
         } catch (RuntimeException e) {
             result.completeExceptionally(e);
+        } catch (Error e) { // NOSONAR: the task's entry point; the caller's future gets the Error, which is rethrown
+            result.completeExceptionally(e);
+            throw e;
         }
     }
 
@@ -118,6 +129,10 @@ final class MemoryRawdataConsumer implements RawdataConsumer {
     public void close() {
         if (closed.compareAndSet(false, true)) {
             client.removed(this);
+            CompletableFuture<RawdataMessage> outstanding = pending.getAndSet(null);
+            if (outstanding != null) {
+                outstanding.completeExceptionally(closedException()); // also one whose task never ran
+            }
             topic.wakeUp();
         }
     }

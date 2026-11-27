@@ -3,8 +3,12 @@
 Every provider keeps this contract, and the shared contract tests (`RawdataClientContractTest` in `rawdata-client-tck`)
 check it for each one: a provider is compliant when it passes them unchanged. Code written against one provider works
 against another, and a system can move from one provider to another with the [copy tool](modules/rawdata-copy-util.md).
-A few limits follow the store and are on each provider's page: how long a metadata key may be, and what a store accepts
-at most.
+The limits are the same in every provider: the smallest that every store holds, so a topic copies from any provider to
+any other. A position and a content key are at most 2000 bytes in UTF-8 (`RawdataMessage.MAX_POSITION_BYTES`,
+`MAX_CONTENT_KEY_BYTES`: PostgreSQL indexes them), and a metadata key at most 127 bytes
+(`RawdataMetadataClient.MAX_KEY_BYTES`: the filesystem provider stores it as a file name in hex). A longer one is
+refused with `IllegalArgumentException` before anything is written: a position or content key when the message is
+published, a metadata key by `put`, `get` and `remove`.
 
 ## One writer per topic
 
@@ -117,17 +121,9 @@ A consumer is for one thread at a time. A client can be shared.
 metadata client of a topic sees the same entries. `keys()` is a sorted snapshot, `get` returns a copy or null, `put`
 replaces, `remove` does nothing for a missing key.
 
-A key is any string without NUL, the empty string, `..` and `/` included, and case matters. Every provider takes
-keys of up to 127 bytes in UTF-8 (`RawdataMetadataClient.PORTABLE_KEY_BYTES`); some take longer ones:
-
-| Provider | Longest key, UTF-8 bytes |
-|---|---|
-| `filesystem` | 127 |
-| `gcs`, `s3` | (1024 − the prefix, topic and `/metadata/k`) / 2, about 500 |
-| `postgres` | 2000 |
-| `memory` | no limit |
-
-A longer key, or one with NUL, is refused by `put`, `get` and `remove` with `IllegalArgumentException`.
+A key is any string without NUL, the empty string, `..` and `/` included, and case matters, of at most 127 bytes in
+UTF-8 (`RawdataMetadataClient.MAX_KEY_BYTES`) in every provider. A longer key, or one with NUL, is refused by `put`,
+`get` and `remove` with `IllegalArgumentException`.
 
 ## A store that does not exist
 

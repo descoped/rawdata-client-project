@@ -57,6 +57,25 @@
   cause.
 - Docs: asynchronous publishes are not ordered against each other, and each call uses a thread of the client until it
   completes; a resume that overlaps the target topic is safe (the module doc said it threw).
+- **Limits are the same in every provider** (Ove, 2026-11-27), the smallest every store holds, so a topic copies
+  between any two providers. The API checks them before anything is written:
+  - a position or content key is at most 2000 bytes in UTF-8 (`RawdataMessage.MAX_POSITION_BYTES`,
+    `MAX_CONTENT_KEY_BYTES`), refused with `IllegalArgumentException` when the message is published (in every
+    producer, through `spi.RawdataLimits.requirePublishable`), so stored messages are read whatever their length.
+    Before, postgres alone failed on about 2.7 KB, with a raw SQL error, and only for a value that did not compress;
+  - a metadata key is at most 127 bytes (`RawdataMetadataClient.MAX_KEY_BYTES`, renamed from `PORTABLE_KEY_BYTES`),
+    checked by `requireValidKey`. Before, postgres took 2000, gcs and s3 about 500 and memory any length.
+  The TCK's `metadataKeyLimit` hook is removed: a provider declares no limits of its own. TCK tests
+  `aPositionOrContentKeyOverTheLimitIsRefused` and `aMetadataKeyOverTheLimitIsRefused` check them in every provider
+  with values that do not compress.
+- postgres: a publish that waited for its turn while its producer closed writes nothing and throws
+  `RawdataClosedException`; a publish under way when the client closes is reported as `RawdataClosedException` (it
+  was a plain `RawdataException`) and writes nothing.
+- postgres: an SQL failure names the operation, the topic and the SQLState (it was `PostgreSQL: <message>`).
+- postgres: a publish wakes the same client's waiting consumers of the topic, as the Avro providers do after an
+  upload; `rawdata.postgres.consumer.wake-on-publish` (default `true`) turns it off.
+- postgres docs: given ids are kept in any order (the doc said a lower one fails); the provider tests wait on
+  `pg_locks` and on the client's own connections instead of a sleep and a server-wide count.
 - The POM names the organisation, Descoped (https://descoped.io).
 
 ## 3.1.0

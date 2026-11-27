@@ -3,6 +3,7 @@ package io.descoped.rawdata.memory;
 import io.descoped.rawdata.api.RawdataClosedException;
 import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.RawdataProducer;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -27,10 +28,7 @@ final class MemoryRawdataProducer implements RawdataProducer {
 
     @Override
     public void publish(RawdataMessage... messages) throws RawdataClosedException {
-        Objects.requireNonNull(messages, "messages");
-        for (RawdataMessage message : messages) {
-            Objects.requireNonNull(message, "one of the messages is null");
-        }
+        RawdataLimits.requirePublishable(messages);
         if (isClosed()) {
             throw new RawdataClosedException("producer of topic " + topic.name + " is closed");
         }

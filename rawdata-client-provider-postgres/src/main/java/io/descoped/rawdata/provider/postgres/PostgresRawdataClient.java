@@ -38,6 +38,7 @@ final class PostgresRawdataClient implements RawdataClient {
     private final Jdbc jdbc;
     private final int prefetchSize;
     private final long pollIntervalMillis;
+    private final boolean wakeOnPublish;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final Set<Object> open = ConcurrentHashMap.newKeySet(); // producers and consumers
     private final Map<String, UUID> written = new ConcurrentHashMap<>(); // the last id this client wrote of each topic
@@ -48,9 +49,10 @@ final class PostgresRawdataClient implements RawdataClient {
         return thread;
     });
 
-    PostgresRawdataClient(HikariDataSource dataSource, int prefetchSize, long pollIntervalMillis) {
+    PostgresRawdataClient(HikariDataSource dataSource, int prefetchSize, long pollIntervalMillis, boolean wakeOnPublish) {
+        this.wakeOnPublish = wakeOnPublish;
         this.dataSource = dataSource;
-        this.jdbc = new Jdbc(dataSource);
+        this.jdbc = new Jdbc(dataSource, this::isClosed);
         this.prefetchSize = prefetchSize;
         this.pollIntervalMillis = pollIntervalMillis;
     }
@@ -84,7 +86,7 @@ final class PostgresRawdataClient implements RawdataClient {
         String name = checked(topic);
         Objects.requireNonNull(position, "position");
         IdRange range = IdRange.around(approxTimestamp, tolerance);
-        UUID id = jdbc.transaction(connection -> {
+        UUID id = jdbc.transaction("find a position in topic " + name, connection -> {
             try (PreparedStatement select = connection.prepareStatement(
                     "SELECT id FROM rawdata_message WHERE topic = ? AND position = ? AND id >= ? AND id < ? ORDER BY id LIMIT 1")) {
                 select.setString(1, name);
@@ -105,7 +107,7 @@ final class PostgresRawdataClient implements RawdataClient {
     @Override
     public RawdataMessage lastMessage(String topic) {
         String name = checked(topic);
-        return jdbc.transaction(connection -> PostgresMessages.last(connection, name));
+        return jdbc.transaction("read the last message of topic " + name, connection -> PostgresMessages.last(connection, name));
     }
 
     @Override
@@ -154,6 +156,21 @@ final class PostgresRawdataClient implements RawdataClient {
 
     void written(String topic, UUID last) {
         written.put(topic, last);
+    }
+
+    /**
+     * After a publish to a topic: wakes this client's waiting consumers of it, so they read at once instead of at the
+     * next poll, unless configured off. Never blocks.
+     */
+    void published(String topic) {
+        if (!wakeOnPublish) {
+            return;
+        }
+        for (Object producerOrConsumer : open) {
+            if (producerOrConsumer instanceof PostgresRawdataConsumer consumer && consumer.topic().equals(topic)) {
+                consumer.wake();
+            }
+        }
     }
 
     ExecutorService executor() {

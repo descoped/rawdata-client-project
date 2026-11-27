@@ -4,9 +4,7 @@ import io.descoped.rawdata.tck.avro.AvroClientContractTest;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
-import java.util.OptionalInt;
 import java.util.UUID;
 
 /**
@@ -20,10 +18,6 @@ class S3LiveContractTest extends AvroClientContractTest {
         return LiveS3.configuration("contract/");
     }
 
-    @Override
-    protected OptionalInt metadataKeyLimit(String topic) {
-        return OptionalInt.of((1024 - (LiveS3.RUN + "contract/" + topic + "/metadata/k").getBytes(StandardCharsets.UTF_8).length) / 2);
-    }
 
     /**
      * A bucket name nobody has; S3 answers NoSuchBucket (or AccessDenied, should someone own it), both failures.

@@ -144,9 +144,9 @@ public final class AvroConfiguration {
 
     /**
      * The longest object-name prefix in UTF-8 bytes: an object name of 1024 bytes then still holds the longest topic
-     * (100), {@code /metadata/k} and a metadata key of {@link RawdataMetadataClient#PORTABLE_KEY_BYTES} in hex.
+     * (100), {@code /metadata/k} and a metadata key of {@link RawdataMetadataClient#MAX_KEY_BYTES} in hex.
      */
-    public static final int MAX_PREFIX_BYTES = 1024 - (100 + "/metadata/k".length()) - 2 * RawdataMetadataClient.PORTABLE_KEY_BYTES;
+    public static final int MAX_PREFIX_BYTES = 1024 - (100 + "/metadata/k".length()) - 2 * RawdataMetadataClient.MAX_KEY_BYTES;
 
     /**
      * An optional folder prefix for object names, for stores whose names are at most 1024 bytes (GCS, S3): empty, or
@@ -168,7 +168,7 @@ public final class AvroConfiguration {
         String folder = prefix.endsWith("/") ? prefix : prefix + "/";
         if (folder.getBytes(StandardCharsets.UTF_8).length > MAX_PREFIX_BYTES) {
             throw new IllegalArgumentException("Configuration '" + key + "' is longer than " + MAX_PREFIX_BYTES
-                    + " bytes, so metadata keys of " + RawdataMetadataClient.PORTABLE_KEY_BYTES + " bytes would not fit");
+                    + " bytes, so metadata keys of " + RawdataMetadataClient.MAX_KEY_BYTES + " bytes would not fit");
         }
         return folder;
     }

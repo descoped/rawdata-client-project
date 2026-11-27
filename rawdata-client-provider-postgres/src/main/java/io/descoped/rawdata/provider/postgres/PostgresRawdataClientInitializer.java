@@ -25,6 +25,8 @@ import java.util.Set;
  *     <tr><td>{@code rawdata.postgres.consumer.prefetch-size}</td><td>{@code 100}: messages per fetch</td></tr>
  *     <tr><td>{@code rawdata.postgres.consumer.prefetch-poll-interval-when-empty}</td><td>{@code 250}: milliseconds
  *     between polls of a topic that has nothing new</td></tr>
+ *     <tr><td>{@code rawdata.postgres.consumer.wake-on-publish}</td><td>{@code true}: a publish wakes the client's
+ *     waiting consumers of the topic, which read at once instead of at the next poll</td></tr>
  * </table>
  * The tables are created in the user's default schema when they are missing; a role that may not create tables can
  * use tables created by another role. Connections are READ COMMITTED whatever the database's default, and show as
@@ -41,6 +43,7 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
     static final String MAX_POOL_SIZE = "postgres.driver.max-pool-size";
     static final String PREFETCH_SIZE = "rawdata.postgres.consumer.prefetch-size";
     static final String POLL_INTERVAL = "rawdata.postgres.consumer.prefetch-poll-interval-when-empty";
+    static final String WAKE_ON_PUBLISH = "rawdata.postgres.consumer.wake-on-publish";
     static final String APPLICATION_NAME = "rawdata-postgres";
 
     /**
@@ -64,6 +67,7 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
     public RawdataClient initialize(Map<String, String> configuration) {
         int prefetchSize = positive(configuration, PREFETCH_SIZE, 100);
         int pollIntervalMillis = positive(configuration, POLL_INTERVAL, 250);
+        boolean wakeOnPublish = bool(configuration, WAKE_ON_PUBLISH, true);
 
         HikariConfig config = new HikariConfig();
         config.setPoolName("rawdata-postgres");
@@ -87,12 +91,12 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
             throw new RawdataException("PostgreSQL: " + e.getMessage(), e);
         }
         try {
-            PostgresSchema.create(new Jdbc(dataSource));
+            PostgresSchema.create(new Jdbc(dataSource, () -> false));
         } catch (RuntimeException e) {
             dataSource.close();
             throw e;
         }
-        return new PostgresRawdataClient(dataSource, prefetchSize, pollIntervalMillis);
+        return new PostgresRawdataClient(dataSource, prefetchSize, pollIntervalMillis, wakeOnPublish);
     }
 
     private static String required(Map<String, String> configuration, String key) {
@@ -101,6 +105,18 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
             throw new IllegalArgumentException("Missing configuration '" + key + "'");
         }
         return value;
+    }
+
+    private static boolean bool(Map<String, String> configuration, String key, boolean defaultValue) {
+        String value = configuration.get(key);
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+        return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "true" -> true;
+            case "false" -> false;
+            default -> throw new IllegalArgumentException("Configuration '" + key + "' must be true or false: " + value);
+        };
     }
 
     private static int positive(Map<String, String> configuration, String key, int defaultValue) {

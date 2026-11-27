@@ -4,9 +4,7 @@ import io.descoped.rawdata.tck.avro.AvroClientContractTest;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
-import java.util.OptionalInt;
 import java.util.UUID;
 
 /**
@@ -22,13 +20,6 @@ class GcsLiveContractTest extends AvroClientContractTest {
         return LiveGcs.configuration(PREFIX);
     }
 
-    /**
-     * An object name is at most 1024 bytes: the run's prefix, the topic, {@code /metadata/k} and the key in hex.
-     */
-    @Override
-    protected OptionalInt metadataKeyLimit(String topic) {
-        return OptionalInt.of((1024 - (LiveGcs.RUN + PREFIX + topic + "/metadata/k").getBytes(StandardCharsets.UTF_8).length) / 2);
-    }
 
     /**
      * A bucket name nobody has; GCS answers 404 (or 403, should someone own it), both failures.

@@ -9,7 +9,6 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
-import java.util.OptionalInt;
 import java.util.UUID;
 
 class FilesystemContractTest extends AvroClientContractTest {
@@ -28,13 +27,6 @@ class FilesystemContractTest extends AvroClientContractTest {
                 "listing.min-interval-seconds", "0");
     }
 
-    /**
-     * A file name is at most 255 characters: {@code k} and the key in hex.
-     */
-    @Override
-    protected OptionalInt metadataKeyLimit(String topic) {
-        return OptionalInt.of(127);
-    }
 
     /**
      * A missing folder is created, so the store that cannot exist is a folder inside a regular file.

@@ -64,7 +64,7 @@ final class PostgresSchema {
      * table exists).
      */
     static void create(Jdbc jdbc) {
-        jdbc.transaction(connection -> {
+        jdbc.transaction("create the rawdata tables", connection -> {
             if (exists(connection)) {
                 return null;
             }

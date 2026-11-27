@@ -2,9 +2,7 @@ package io.descoped.rawdata.provider.s3.test;
 
 import io.descoped.rawdata.tck.avro.AvroClientContractTest;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
-import java.util.OptionalInt;
 
 class S3ContractTest extends AvroClientContractTest {
 
@@ -15,13 +13,6 @@ class S3ContractTest extends AvroClientContractTest {
         return S3Mock.configuration(PREFIX);
     }
 
-    /**
-     * An object key is at most 1024 bytes: the prefix, the topic, {@code /metadata/k} and the key in hex.
-     */
-    @Override
-    protected OptionalInt metadataKeyLimit(String topic) {
-        return OptionalInt.of((1024 - (PREFIX + topic + "/metadata/k").getBytes(StandardCharsets.UTF_8).length) / 2);
-    }
 
     @Override
     protected Map<String, String> missingStoreConfiguration() {

@@ -61,9 +61,10 @@ this repository.
   in every provider, so providers can be swapped (owner's decision, 2026-11-18), and `RawdataClientContractTest`
   checks it; a provider is compliant only if it passes it unchanged. A behaviour test goes in the TCK, never in one
   provider's tests, which only check internals (SQL, files and objects, configuration, credentials). Stores of the
-  Avro engine also pass `AvroStoreContractTest`. Backend limits may differ (metadata key length) and are declared to
-  the TCK and documented per provider; NUL is refused in positions, ordering groups, content names and metadata
-  keys by the API. A store that does not exist fails with `RawdataException`, never reads as empty. Topic names are
+  Avro engine also pass `AvroStoreContractTest`. Limits are the same in every provider (Ove, 2026-11-27): the
+  smallest every store holds, so a topic copies between any two; the API checks them before anything is written: a
+  position or content key at most 2000 bytes in UTF-8 (PostgreSQL's index), a metadata key at most 127 (the
+  filesystem's file name). NUL is refused in positions, ordering groups, content names and metadata keys by the API. A store that does not exist fails with `RawdataException`, never reads as empty. Topic names are
   validated and never spliced into SQL, file paths or object names. One exception, by the owner's decision of
   2026-11-19 to follow 2.x: given ids are kept in any order, and where a lower id published later is read (id order
   in memory and postgres, publish order in the Avro providers) and what `lastMessage` returns depend on the provider.
@@ -99,8 +100,7 @@ this repository.
   `@{argLine}` defined when JaCoCo does not set it.
 - **Postgres invariants**: the topic is a column and always a bind parameter, never SQL text; a publish holds the
   topic's advisory lock (`pg_advisory_xact_lock`) while it reads the last id, compares it with the last this client
-  wrote (a different one is another writer), and writes; the tables are created idempotently under an advisory lock;
-  a metadata key is at most 2000 bytes.
+  wrote (a different one is another writer), and writes; the tables are created idempotently under an advisory lock.
 - The `filesystem`, `gcs` and `s3` tests each run the TCK (client and store contract) and the provider's own tests,
   patched into the provider on the class path: `filesystem` offline, `gcs` against a fake GCS server
   (`fsouza/fake-gcs-server`) and `s3` against S3Mock (`adobe/s3mock`), both through Testcontainers. The gcs client and

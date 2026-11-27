@@ -354,19 +354,10 @@ application can pass `config.asMap()` or a `config.subset(..)`:
 
 ### Name limits
 
-GCS object names are at most 1024 bytes in UTF-8. With a prefix, the topic and `/metadata/k`, that limits a metadata
-key to
-
-```
-(1024 − bytes of "<prefix><topic>/metadata/k") / 2
-```
-
-bytes in UTF-8, because the key is stored in hexadecimal. With no prefix and topic `invoices` that is 502 bytes. A
-longer key is refused with `IllegalArgumentException` by `put`, `get` and `remove`.
-
-The prefix is limited so that every topic (at most 100 characters) can always hold a key of 127 bytes, the length
-every provider accepts (`RawdataMetadataClient.PORTABLE_KEY_BYTES`): 1024 − (100 + 11) − 2 × 127 = 659 bytes,
-including the trailing `/`. A longer prefix fails when the client is created.
+GCS object names are at most 1024 bytes in UTF-8, and a metadata entry's name is `<prefix><topic>/metadata/k` and the
+key in hexadecimal. The prefix is limited so that every topic (at most 100 characters) holds a key of 127 bytes, the
+limit in every provider (`RawdataMetadataClient.MAX_KEY_BYTES`): 1024 − (100 + 11) − 2 × 127 = 659 bytes, including
+the trailing `/`. A longer prefix fails when the client is created; a longer key is refused by the API.
 
 ## Credentials
 
@@ -442,7 +433,7 @@ Overwriting a metadata entry replaces an object, which GCS counts as a delete to
 | `RawdataWriterConflictException` | another process wrote the topic; only one process may write a topic. Stop one of them; a new client starts from the topic's end |
 | "The writer of topic … failed" on `publish`, `flush` or `close` | an upload failed after six attempts, for example during an outage; the windows stay sealed in `local-temp-folder`, and the next client to write the topic uploads them in order |
 | messages are not visible right after `publish` | they are visible once their window is uploaded: after `avro-file.max.seconds`, past `avro-file.max.bytes`, or when the producer closes |
-| `IllegalArgumentException: The metadata key is too long for an object name in GCS` | the key, with the prefix and topic, does not fit in 1024 bytes; see [name limits](#name-limits) |
+| `IllegalArgumentException: A metadata key is at most 127 bytes in UTF-8` | the key is over the limit of every provider; see [name limits](#name-limits) |
 | `IOException: Generation … of … is gone` | a segment was replaced or deleted by hand while a consumer read it; segments are written once and must not be changed |
 | uploads slow down under load | GCS is throttling (429, 503); the client lowers its concurrent uploads by itself. Large windows on a slow link may also time out (5 minutes per attempt), which counts as throttling; lower `avro-file.max.bytes` |
 
@@ -464,7 +455,7 @@ Things to keep in mind:
 
 | Test | What it checks | Against |
 |---|---|---|
-| `GcsContractTest` | the provider contract (`AvroClientContractTest`, which extends `RawdataClientContractTest`), unchanged, with the metadata key limit and a missing bucket declared | `fsouza/fake-gcs-server` in Docker (Testcontainers) |
+| `GcsContractTest` | the provider contract (`AvroClientContractTest`, which extends `RawdataClientContractTest`), unchanged, with a missing bucket declared | `fsouza/fake-gcs-server` in Docker (Testcontainers) |
 | `GcsStoreContractTest` | the Avro store contract (`AvroStoreContractTest`), and generation pinning | the fake GCS server |
 | `GcsProviderTest` | the objects in the bucket and the configuration checks | the fake GCS server |
 | `GcsClientTest` | retries, statuses, the CRC32C header, name encoding, paging, token retries and the 401 refresh | a local `jdk.httpserver` playing GCS |

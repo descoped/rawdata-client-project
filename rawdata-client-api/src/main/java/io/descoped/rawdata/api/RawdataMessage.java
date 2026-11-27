@@ -14,9 +14,21 @@ import java.util.UUID;
  * made by {@link #builder()} only, so a store can keep a message as it is.
  * <p>
  * The position, the ordering group and the content keys may be any string without the NUL character (U+0000), which
- * a PostgreSQL text column cannot hold, so every provider stores the same messages.
+ * a PostgreSQL text column cannot hold, so every provider stores the same messages. A position and a content key are
+ * at most {@value #MAX_POSITION_BYTES} and {@value #MAX_CONTENT_KEY_BYTES} bytes in UTF-8: every provider refuses a
+ * longer one when the message is published, with {@link IllegalArgumentException}, and writes nothing of the call.
  */
 public sealed interface RawdataMessage permits RawdataDefaultMessage {
+
+    /**
+     * The longest position, in UTF-8 bytes, that a provider publishes; the same in every provider.
+     */
+    int MAX_POSITION_BYTES = 2000;
+
+    /**
+     * The longest content key, in UTF-8 bytes, that a provider publishes; the same in every provider.
+     */
+    int MAX_CONTENT_KEY_BYTES = 2000;
 
     /**
      * Creates a builder for a new message.

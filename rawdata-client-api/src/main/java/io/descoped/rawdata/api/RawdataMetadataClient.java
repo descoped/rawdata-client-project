@@ -7,27 +7,31 @@ import java.util.Set;
  * belong to the topic, so every metadata client of the topic sees the same entries.
  * <p>
  * A key is any string without the NUL character (U+0000), the empty string included; the methods that take
- * a key check it with {@link #requireValidKey(String)}. How long a key may be depends on the store, and each provider
- * documents its limit; a longer key is refused with {@link IllegalArgumentException}. Every provider takes keys of
- * at least {@value #PORTABLE_KEY_BYTES} bytes in UTF-8.
+ * a key check it with {@link #requireValidKey(String)}. A key is at most {@value #MAX_KEY_BYTES} bytes in UTF-8 in
+ * every provider; a longer key is refused with {@link IllegalArgumentException} before the store is used.
  */
 public interface RawdataMetadataClient {
 
     /**
-     * The key length, in UTF-8 bytes, that every provider takes.
+     * The longest key, in UTF-8 bytes, the same in every provider: a file name holds {@code k} and the key in hex.
      */
-    int PORTABLE_KEY_BYTES = 127;
+    int MAX_KEY_BYTES = 127;
 
     /**
-     * Checks a metadata key: not null, and no NUL character.
+     * Checks a metadata key: not null, no NUL character, and at most {@value #MAX_KEY_BYTES} bytes in UTF-8.
      *
      * @param key the key
      * @return the key, unchanged
      * @throws NullPointerException     if the key is null
-     * @throws IllegalArgumentException if the key has a NUL character
+     * @throws IllegalArgumentException if the key has a NUL character or is too long
      */
     static String requireValidKey(String key) {
-        return RawdataDefaultMessage.requireNoNul(java.util.Objects.requireNonNull(key, "key"), "A metadata key");
+        RawdataDefaultMessage.requireNoNul(java.util.Objects.requireNonNull(key, "key"), "A metadata key");
+        int bytes = key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        if (bytes > MAX_KEY_BYTES) {
+            throw new IllegalArgumentException("A metadata key is at most " + MAX_KEY_BYTES + " bytes in UTF-8: " + bytes);
+        }
+        return key;
     }
 
     /**

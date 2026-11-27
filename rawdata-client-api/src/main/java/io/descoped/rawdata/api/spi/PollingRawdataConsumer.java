@@ -126,7 +126,7 @@ public abstract class PollingRawdataConsumer implements RawdataConsumer {
                 fill(buffer);
             } catch (RuntimeException e) {
                 if (isClosed()) {
-                    throw closedException(); // the client closed its store during the read
+                    throw closedException(e); // the client closed its store during the read
                 }
                 throw e;
             }
@@ -209,7 +209,7 @@ public abstract class PollingRawdataConsumer implements RawdataConsumer {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt(); // closing the client interrupts its threads
-            result.completeExceptionally(isClosed() ? closedException() : e);
+            result.completeExceptionally(isClosed() ? closedException(e) : e);
         } catch (RuntimeException e) {
             result.completeExceptionally(e);
         } catch (Error e) { // NOSONAR: the task's entry point; the caller's future gets the Error, which is rethrown
@@ -254,7 +254,11 @@ public abstract class PollingRawdataConsumer implements RawdataConsumer {
     }
 
     private RawdataClosedException closedException() {
-        return new RawdataClosedException("consumer of topic " + topic + " is closed");
+        return closedException(null);
+    }
+
+    private RawdataClosedException closedException(Throwable cause) {
+        return new RawdataClosedException("consumer of topic " + topic + " is closed", cause);
     }
 
     @Override

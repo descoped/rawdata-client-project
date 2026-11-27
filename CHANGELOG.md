@@ -50,6 +50,13 @@
   to the head of the buffer; a dependent that is not async runs then too, so it must not wait for another receive of
   the same consumer. Closing a consumer fails its outstanding `receiveAsync`, also one whose task had not started
   when the client stopped its threads.
+- `cursorOf` by position refuses a negative tolerance with `IllegalArgumentException` (before: not found), and a
+  tolerance or `receiveUpTo` timeout as long as a `Duration` can be no longer overflows. The range is computed once,
+  by `IdRange` in the spi package, for every provider; the TCK checks both.
+- `RawdataClosedException(String, Throwable)`: a read that fails as its consumer closes keeps the failure as the
+  cause.
+- Docs: asynchronous publishes are not ordered against each other, and each call uses a thread of the client until it
+  completes; a resume that overlaps the target topic is safe (the module doc said it threw).
 - The POM names the organisation, Descoped (https://descoped.io).
 
 ## 3.1.0

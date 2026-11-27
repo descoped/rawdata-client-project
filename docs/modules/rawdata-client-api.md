@@ -197,7 +197,9 @@ topic, read from the beginning, gives every message once (see [Ids and order](..
 
 A `RawdataProducer` publishes on one topic. `publish` takes one or more messages (varargs or a `List`); the messages
 of one call are written together, all or none, in the order given. `publishAsync` does the same on the client's
-threads and returns a `CompletableFuture<Void>`. A producer may be used from several threads, and a client may have
+threads and returns a `CompletableFuture<Void>`; each call uses one of the client's threads until it completes, and
+asynchronous calls are not ordered against each other, even from one thread (publish the next when the future
+completes, or use `publish`, when order matters). A producer may be used from several threads, and a client may have
 several producers on a topic: the client keeps them in one order.
 
 ### One writer per topic
@@ -386,8 +388,9 @@ try (RawdataConsumer from = end == null ? source.consumer("invoices") : source.c
 }
 ```
 
-This is how the [copy tool](rawdata-copy-util.md) resumes. Because ids are kept, the target topic must be empty or end
-before the first id copied; otherwise the first publish throws `IllegalArgumentException`.
+This is how the [copy tool](rawdata-copy-util.md) resumes. Because ids are kept, a resume that overlaps the target is
+safe: a message the target already holds is skipped as a no-op, and a different message under one of its ids fails with
+`RawdataDuplicateIdException`.
 
 ## The memory and discard providers
 
@@ -726,7 +729,7 @@ with `RawdataClosedException`).
 [`PollingRawdataConsumer`](../../rawdata-client-api/src/main/java/io/descoped/rawdata/api/spi/PollingRawdataConsumer.java):
 the receive loop. One receive or seek runs at a time (others wait their turn); a receive that finds nothing waits for
 the poll interval or a `wake()`, without holding the turn, and a wake-up that comes during a read is not lost. A read
-that fails after the client closed is reported as `RawdataClosedException`.
+that fails after the client closed is reported as `RawdataClosedException`, with the read's failure as its cause.
 
 | Member | |
 |---|---|
@@ -745,6 +748,14 @@ unique-id rule, for every provider that takes given ids.
 |---|---|
 | `public static boolean same(RawdataMessage a, RawdataMessage b)` | the same id, position, ordering group, sequence number, and content keys in order with the same bytes |
 | `public static Map<UUID, RawdataMessage> distinct(String topic, List<RawdataMessage> messages)` | a call's messages by id, a repeat left out; `RawdataDuplicateIdException` for two different ones |
+
+[`IdRange`](../../rawdata-client-api/src/main/java/io/descoped/rawdata/api/spi/IdRange.java): the ids written in a
+range of time, for `cursorOf` by position.
+
+| Member | |
+|---|---|
+| `public static IdRange around(long approxTimestamp, Duration tolerance)` | `[approxTimestamp - tolerance, approxTimestamp + tolerance]` by the millisecond, cut to the times an id holds; a negative tolerance: `IllegalArgumentException` |
+| `UUID from()`, `UUID to()` | the first id in the range, and the first after it |
 
 See [writing a provider](../writing-a-provider.md) for how to use them.
 

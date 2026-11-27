@@ -23,4 +23,14 @@ public class RawdataClosedException extends RawdataException {
     public RawdataClosedException(String message) {
         super(message);
     }
+
+    /**
+     * Creates the exception with a message and the failure that was seen when it closed.
+     *
+     * @param message the detail message
+     * @param cause   the failure
+     */
+    public RawdataClosedException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

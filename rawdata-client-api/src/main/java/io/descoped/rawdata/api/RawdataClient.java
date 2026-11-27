@@ -157,9 +157,10 @@ public interface RawdataClient extends AutoCloseable {
      * @param position        the position
      * @param inclusive       whether that message is read first
      * @param approxTimestamp when the message was written, approximately, in milliseconds since 1970-01-01T00:00Z
-     * @param tolerance       how far from the timestamp to search
+     * @param tolerance       how far from the timestamp to search, zero or more
      * @return the cursor, never null
      * @throws RawdataNoSuchPositionException if no message with the position is found in the range
+     * @throws IllegalArgumentException       if the tolerance is negative
      */
     RawdataCursor cursorOf(String topic, String position, boolean inclusive, long approxTimestamp, Duration tolerance) throws RawdataNoSuchPositionException;
 

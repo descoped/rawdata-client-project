@@ -9,6 +9,7 @@ import io.descoped.rawdata.api.RawdataIds;
 import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.RawdataMetadataClient;
 import io.descoped.rawdata.api.RawdataNoSuchPositionException;
+import io.descoped.rawdata.api.spi.IdRange;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataTopics;
 import io.descoped.rawdata.api.RawdataWriterConflictException;
@@ -135,9 +136,9 @@ public final class AvroRawdataClient implements RawdataClient {
     public RawdataCursor cursorOf(String topic, String position, boolean inclusive, long approxTimestamp, Duration tolerance) {
         String name = checked(topic);
         Objects.requireNonNull(position, "position");
-        Objects.requireNonNull(tolerance, "tolerance");
-        UUID lowerBound = RawdataIds.beginningOf(approxTimestamp - tolerance.toMillis());
-        UUID upperBound = RawdataIds.beginningOf(approxTimestamp + tolerance.toMillis() + 1);
+        IdRange range = IdRange.around(approxTimestamp, tolerance);
+        UUID lowerBound = range.from();
+        UUID upperBound = range.to();
         for (long segment = firstSegmentReaching(name, lowerBound); ; segment++) {
             AvroSegmentReader reader = reader(name, segment);
             if (reader == null) {

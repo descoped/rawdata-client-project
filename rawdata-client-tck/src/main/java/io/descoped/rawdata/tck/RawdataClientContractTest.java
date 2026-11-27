@@ -839,6 +839,37 @@ public abstract class RawdataClientContractTest {
     }
 
     /**
+     * A tolerance as long as a {@link Duration} can be is searched without overflowing: from now or the latest time it
+     * finds the position, from the earliest it reaches only to 1970. A negative tolerance is refused.
+     */
+    @Test
+    public void anyToleranceIsSearchedAndANegativeOneIsRefused() {
+        publish("a");
+        Duration longest = Duration.ofSeconds(Long.MAX_VALUE, 999_999_999);
+        assertNotNull(client.cursorOf(topic, "a", true, System.currentTimeMillis(), longest));
+        assertNotNull(client.cursorOf(topic, "a", true, Long.MAX_VALUE, longest));
+        assertThrows(RawdataNoSuchPositionException.class, // from the earliest time, it reaches only to 1970
+                () -> client.cursorOf(topic, "a", true, Long.MIN_VALUE, longest));
+        assertThrows(IllegalArgumentException.class,
+                () -> client.cursorOf(topic, "a", true, System.currentTimeMillis(), Duration.ofMillis(-1)));
+    }
+
+    /**
+     * {@code receiveUpTo} takes a timeout as long as a {@link Duration} can be, without overflowing.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    public void receiveUpToTakesTheLongestTimeout() throws Exception {
+        publish("a");
+        awaitPublished(client, topic);
+        try (RawdataConsumer consumer = client.consumer(topic)) {
+            List<? extends RawdataMessage> received = consumer.receiveUpTo(10, Duration.ofSeconds(Long.MAX_VALUE, 999_999_999));
+            assertEquals("a", received.get(0).position());
+        }
+    }
+
+    /**
      * An unknown position, or any position in an empty topic, is not found.
      */
     @Test

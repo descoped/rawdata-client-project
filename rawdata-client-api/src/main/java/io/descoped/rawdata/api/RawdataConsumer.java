@@ -60,7 +60,7 @@ public interface RawdataConsumer extends AutoCloseable {
             throw new IllegalArgumentException("timeout must not be negative: " + timeout);
         }
         List<RawdataMessage> messages = new ArrayList<>(Math.min(maxMessages, 1024));
-        long millis = Math.min(timeout.toMillis(), Integer.MAX_VALUE);
+        long millis = timeout.compareTo(Duration.ofMillis(Integer.MAX_VALUE)) > 0 ? Integer.MAX_VALUE : timeout.toMillis();
         RawdataMessage message = receive((int) millis, TimeUnit.MILLISECONDS);
         while (message != null) {
             messages.add(message);
@@ -83,7 +83,7 @@ public interface RawdataConsumer extends AutoCloseable {
      * Receives the next message after the current position when it is available. The position moves to the message
      * before the future completes. At most one receive may be outstanding at a time. A future that is cancelled, or
      * times out ({@link CompletableFuture#orTimeout}), takes no message: the next receive gets it, and the receive
-     * stops waiting. The future may complete while the consumer's turn is held: a dependent that is not async must
+     * stops waiting. The receive runs on a thread of the client until the future is done. The future may complete while the consumer's turn is held: a dependent that is not async must
      * not wait for another receive of this consumer.
      *
      * @return a future of the next message; it completes exceptionally with {@link RawdataClosedException} if the

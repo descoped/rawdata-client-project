@@ -669,7 +669,7 @@ final class AvroTopicWriter {
      * the error for the caller to rethrow.
      */
     private Error failed(Error error) {
-        fail(new RawdataException("The writer" + OF_TOPIC + topic + FAILED + ": " + error, error));
+        fail(new RawdataException(String.valueOf(error), error)); // reported as "The writer of topic … failed: <error>"
         return error;
     }
 

@@ -257,10 +257,14 @@ public final class AvroRawdataClient implements RawdataClient {
      * lock held.
      */
     AvroTopicWriter writer(String topic) {
-        AvroTopicWriter writer = writers.computeIfAbsent(topic, t -> {
+        // Started outside the map's compute: recovery reads and uploads, and must not hold other topics' map entries.
+        // The publish lock makes this thread the topic's only starter.
+        AvroTopicWriter writer = writers.get(topic);
+        if (writer == null) {
             checkOpen();
-            return AvroTopicWriter.start(this, t, window);
-        });
+            writer = AvroTopicWriter.start(this, topic, window);
+            writers.put(topic, writer);
+        }
         if (isClosed()) { // close() may have gone over the writers before this one was added
             writers.remove(topic, writer);
             writer.close(closeTimeoutNanos());

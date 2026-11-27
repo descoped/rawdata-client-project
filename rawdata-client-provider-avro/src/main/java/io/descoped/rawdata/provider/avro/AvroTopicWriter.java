@@ -43,10 +43,11 @@ import java.util.stream.Stream;
  * uploaded in the background as the topic's next segment while publishes go on in a new window. Uploads of a topic run
  * one at a time, in segment order; a publish waits while {@code avro-file.max.pending-uploads} sealed windows wait.
  * <p>
- * <b>Whole calls.</b> An Avro block ends only between publish calls, and is then forced to disk, so a crash leaves
- * whole calls on disk, never part of one. Every call ends its block, so a call that returned survives a crash of the
- * process. A write that fails in the middle of a call leaves the window as a crash
- * would: its complete blocks on disk, for recovery.
+ * <b>Whole calls.</b> An Avro block ends only between publish calls, and is then written to the file, so a crash
+ * leaves whole calls in the file, never part of one. Every call ends its block, so a call that returned survives a
+ * crash of the process. The file is forced to disk every {@code avro-file.sync.interval} bytes, so a crash of the
+ * machine loses at most that much. A write that fails in the middle of a call leaves the window as a crash would: its
+ * complete blocks in the file, for recovery.
  * <p>
  * <b>One writer.</b> The writer starts from the topic's end. A segment number that is taken when a window opens or
  * uploads means another process wrote the topic: the writer fails with {@link RawdataWriterConflictException}, its
@@ -117,7 +118,8 @@ final class AvroTopicWriter {
         long headerBytes; // where the first block starts
         long blockStart; // where the block being filled starts
         long previousBlockStart; // where the block before it starts
-        boolean torn; // a write failed in the middle of a call: only the forced blocks may be kept
+        long forcedThrough; // how much of the file is forced to disk
+        boolean torn; // a write failed in the middle of a call: only the written blocks may be kept
         ScheduledFuture<?> timer;
         final Map<UUID, byte[]> digests = new HashMap<>(); // the window's ids, for the unique-id check (see NOT_SEEN)
 
@@ -197,8 +199,9 @@ final class AvroTopicWriter {
     // ---- publishing
 
     /**
-     * Appends a call's messages to the open window, opening one if there is none. The call ends its block and forces
-     * it to disk before it returns, so a block holds one call and a call that returned survives a crash.
+     * Appends a call's messages to the open window, opening one if there is none. The call ends its block and writes
+     * it to the file before it returns, so a block holds one call and a call that returned survives a crash of the
+     * process.
      *
      * @param withIds gives the messages without an id an id after the given greatest id
      * @param given   the digests of the messages given with an id, by identity, computed before the lock
@@ -208,7 +211,7 @@ final class AvroTopicWriter {
         try {
             throwIfFailed();
             if (current != null && ageSeconds(current) >= settings.maxSeconds()) {
-                seal();
+                sealOrFail();
             }
             if (current == null) {
                 openWindow();
@@ -223,10 +226,10 @@ final class AvroTopicWriter {
             }
             window.count += stored.size();
             if (window.blockBytes > 0) {
-                endBlock(window); // a call that returns is on disk
+                endBlock(window); // a call that returns is written to the file
             }
-            if (window.out.getChannel().size() + window.blockBytes >= settings.maxBytes()) {
-                seal();
+            if (window.blockStart >= settings.maxBytes()) {
+                sealOrFail();
             }
         } catch (IOException e) {
             throw fail(storeFailure("Writing the upload window" + OF_TOPIC + topic, e));
@@ -323,7 +326,7 @@ final class AvroTopicWriter {
         try {
             throwIfFailed();
             if (current != null) {
-                seal();
+                sealOrFail();
             }
         } catch (IOException e) {
             throw fail(storeFailure(CLOSING + topic, e));
@@ -418,7 +421,7 @@ final class AvroTopicWriter {
         try {
             writer.setFlushOnEveryBlock(true);
             AvroSegments.create(writer, out, settings.syncInterval()); // Avro never ends a block by itself; endBlock does
-            out.getChannel().force(true); // the header, so a crash right after leaves a readable window
+            out.getFD().sync(); // the header, so a crash right after leaves a readable window
         } catch (IOException | RuntimeException e) {
             out.close();
             Files.deleteIfExists(file);
@@ -427,6 +430,7 @@ final class AvroTopicWriter {
         Window window = new Window(file, segment, tail.lastId(), out, writer);
         window.blockStart = writer.sync(); // the end of the header
         window.headerBytes = window.blockStart;
+        window.forcedThrough = window.blockStart;
         current = window;
         // The timer hands the close to the executor: a topic whose uploads are slow never holds up another's timer.
         window.timer = client.scheduler().schedule(() -> client.executor().execute(() -> closeIfStill(window)),
@@ -440,25 +444,30 @@ final class AvroTopicWriter {
         appendLock.lock();
         try {
             if (current == window && failureOrNull() == null && !window.torn) {
-                seal();
+                sealOrFail();
             }
         } catch (IOException e) {
             fail(storeFailure(CLOSING + topic, e));
         } catch (RuntimeException e) {
-            LOG.log(System.Logger.Level.WARNING, CLOSING + topic + FAILED, e);
+            LOG.log(System.Logger.Level.WARNING, CLOSING + topic + FAILED, e); // the writer is failed
         } finally {
             appendLock.unlock();
         }
     }
 
     /**
-     * Writes the block being filled and forces it to disk, so the calls in it survive a crash of the process.
+     * Writes the block being filled to the file, so the calls in it survive a crash of the process, and forces the file
+     * to disk once {@code syncInterval} bytes are written since it was last forced, so a crash of the machine loses at
+     * most that much. Never through the file's channel: an interrupted caller would close it.
      */
-    private static void endBlock(Window window) throws IOException {
+    private void endBlock(Window window) throws IOException {
         window.previousBlockStart = window.blockStart;
-        window.blockStart = window.writer.sync();
-        window.out.getChannel().force(false);
+        window.blockStart = window.writer.sync(); // the file's length: every block is written whole
         window.blockBytes = 0;
+        if (window.blockStart - window.forcedThrough >= settings.syncInterval()) {
+            window.out.getFD().sync();
+            window.forcedThrough = window.blockStart;
+        }
     }
 
     /**
@@ -471,6 +480,18 @@ final class AvroTopicWriter {
         if (window.count > 0) {
             AvroSegments.fillSummary(window.file,
                     new AvroSegments.Summary(window.firstId, window.lastId, window.count, lastBlock), window.headerBytes);
+        }
+    }
+
+    /**
+     * Seals the open window, failing the writer if that fails in any way: the window is no longer the open one, and
+     * the next must not open in its place.
+     */
+    private void sealOrFail() throws IOException {
+        try {
+            seal();
+        } catch (RuntimeException e) {
+            throw fail(e);
         }
     }
 
@@ -636,7 +657,7 @@ final class AvroTopicWriter {
 
     /**
      * Closes the open window of a failed writer. On a conflict it is set aside. A window torn by a failed write is
-     * left as a crash leaves it, its forced blocks on disk, for recovery to cut back. Otherwise it is forced to disk
+     * left as a crash leaves it, its written blocks on disk, for recovery to cut back. Otherwise it is forced to disk
      * and sealed, for the next writer to upload.
      */
     private void abandonOpenWindow(boolean conflict) {

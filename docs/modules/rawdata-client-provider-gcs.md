@@ -333,7 +333,7 @@ The Avro engine's upload window keys, the same in `filesystem`, `gcs` and `s3`; 
 | `local-temp-folder` | | required: a local disk where producers buffer, one folder per topic; one process per folder |
 | `avro-file.max.seconds` | `60` | the longest a window stays open |
 | `avro-file.max.bytes` | `67108864` (64 MiB) | the size at which a window closes |
-| `avro-file.sync.interval` | `524288` (512 KiB) | the block size Avro's buffer is sized for; every publish call ends its own block, forced to disk |
+| `avro-file.sync.interval` | `524288` (512 KiB) | the block size Avro's buffer is sized for; every publish call ends its own block, written to the file; the file is forced to disk every this many bytes |
 | `avro-file.max.pending-uploads` | `4` | sealed windows that may wait for upload before `publish` waits |
 | `avro-file.close-timeout-seconds` | `30` | the longest `close()` waits for the uploads |
 | `avro-file.upload.max-concurrency` | `16` | the most uploads of a client at once, across its topics |

@@ -306,7 +306,7 @@ missing.
 | `s3.listing.min-interval-seconds` | `1` | How often a waiting consumer looks for new segments, in whole seconds; `0` looks as often as a receive asks (but at most every 10 ms). |
 | `local-temp-folder` | | Required. Where producers buffer windows: a local disk, one folder per process. |
 | `avro-file.max.seconds` | `60` | The longest a window stays open. |
-| `avro-file.max.bytes` | `67108864` (64 MiB) | The size at which a window closes. |
+| `avro-file.max.bytes` | `67108864` (64 MiB) | The size at which a window closes; at most 1 GiB. |
 | `avro-file.sync.interval` | `524288` (512 KiB) | The block size Avro's buffer is sized for; every publish call ends its own block, written to the file; the file is forced to disk every this many bytes. |
 | `avro-file.max.pending-uploads` | `4` | Sealed windows of a topic that may wait for upload before `publish` waits. |
 | `avro-file.close-timeout-seconds` | `30` | The longest `close()` waits for the uploads. |

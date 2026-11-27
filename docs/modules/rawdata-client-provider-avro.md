@@ -340,7 +340,7 @@ These keys are read by `AvroUploadWindow.of`, the same in `filesystem`, `gcs` an
 |---|---|---|
 | `local-temp-folder` | none, required | where windows are buffered: a local disk, one folder per topic. Made absolute and created if missing. |
 | `avro-file.max.seconds` | `60` | the longest a window stays open, in seconds. Bounds how late a message becomes visible, and how much a lost disk loses. |
-| `avro-file.max.bytes` | `67108864` (64 MiB) | the size at which a window closes, checked after each call; a window exceeds it by at most its last call |
+| `avro-file.max.bytes` | `67108864` (64 MiB) | the size at which a window closes, checked after each call; a window exceeds it by at most its last call; at most `1073741824` (1 GiB), as an upload holds the whole window in memory |
 | `avro-file.sync.interval` | `524288` (512 KiB) | the block size Avro's buffer is sized for, and the blocks of a window rewritten by recovery; every publish call still ends its own block |
 | `avro-file.max.pending-uploads` | `4` | sealed windows of a topic that may wait for upload (the one uploading included) before `publish` waits |
 | `avro-file.close-timeout-seconds` | `30` | the longest `producer.close()` or `client.close()` waits for the uploads |

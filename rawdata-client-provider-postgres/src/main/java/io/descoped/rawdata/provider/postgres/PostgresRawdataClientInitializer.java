@@ -98,22 +98,7 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
         if (bool(configuration, TCP_KEEP_ALIVE, false)) {
             config.addDataSourceProperty("tcpKeepAlive", true); // pgjdbc's default is off
         }
-        String sslMode = configuration.get(SSL_MODE);
-        String mode = sslMode == null || sslMode.isBlank() ? null : sslMode.trim().toLowerCase(Locale.ROOT);
-        if (mode != null) {
-            if (!SSL_MODES.contains(mode)) {
-                throw new IllegalArgumentException("Configuration '" + SSL_MODE + "' must be one of " + new TreeSet<>(SSL_MODES) + ": " + sslMode);
-            }
-            config.addDataSourceProperty("sslMode", mode);
-        }
-        String sslRootCert = configuration.get(SSL_ROOT_CERT);
-        if (sslRootCert != null && !sslRootCert.isBlank()) {
-            if (!"verify-ca".equals(mode) && !"verify-full".equals(mode)) { // otherwise no certificate is checked
-                throw new IllegalArgumentException("Configuration '" + SSL_ROOT_CERT + "' needs '" + SSL_MODE
-                        + "' verify-ca or verify-full; in mode " + (mode == null ? "prefer (the default)" : mode) + " it would be ignored");
-            }
-            config.addDataSourceProperty("sslRootCert", sslRootCert.trim());
-        }
+        tls(configuration, config);
         config.setAutoCommit(false);
         // The commit order of ids relies on it: after the topic lock, the last id must be read with a fresh snapshot.
         config.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
@@ -141,6 +126,28 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
             throw new IllegalArgumentException("Missing configuration '" + key + "'");
         }
         return value;
+    }
+
+    /**
+     * The TLS settings: a mode pgjdbc knows, in any case, and a root certificate only where it is used.
+     */
+    private static void tls(Map<String, String> configuration, HikariConfig config) {
+        String sslMode = configuration.get(SSL_MODE);
+        String mode = sslMode == null || sslMode.isBlank() ? null : sslMode.trim().toLowerCase(Locale.ROOT);
+        if (mode != null) {
+            if (!SSL_MODES.contains(mode)) {
+                throw new IllegalArgumentException("Configuration '" + SSL_MODE + "' must be one of " + new TreeSet<>(SSL_MODES) + ": " + sslMode);
+            }
+            config.addDataSourceProperty("sslMode", mode);
+        }
+        String sslRootCert = configuration.get(SSL_ROOT_CERT);
+        if (sslRootCert != null && !sslRootCert.isBlank()) {
+            if (!"verify-ca".equals(mode) && !"verify-full".equals(mode)) { // otherwise no certificate is checked
+                throw new IllegalArgumentException("Configuration '" + SSL_ROOT_CERT + "' needs '" + SSL_MODE
+                        + "' verify-ca or verify-full; in mode " + (mode == null ? "prefer (the default)" : mode) + " it would be ignored");
+            }
+            config.addDataSourceProperty("sslRootCert", sslRootCert.trim());
+        }
     }
 
     private static boolean bool(Map<String, String> configuration, String key, boolean defaultValue) {

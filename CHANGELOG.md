@@ -76,6 +76,11 @@
   upload; `rawdata.postgres.consumer.wake-on-publish` (default `true`) turns it off.
 - postgres docs: given ids are kept in any order (the doc said a lower one fails); the provider tests wait on
   `pg_locks` and on the client's own connections instead of a sleep and a server-wide count.
+- postgres, new optional settings, off by default (design review pg-3, pg-4):
+  - `rawdata.postgres.publish.lock-timeout-ms`: a publish that waits longer for the topic lock fails (SQLState
+    `55P03`) and writes nothing;
+  - `postgres.driver.tcp-keep-alive`;
+  - `postgres.driver.ssl-mode` and `postgres.driver.ssl-root-cert`, passed to pgjdbc's `sslmode` and `sslrootcert`.
 - The POM names the organisation, Descoped (https://descoped.io).
 
 ## 3.1.0

@@ -50,7 +50,7 @@ final class PostgresRawdataProducer extends OrderedRawdataProducer {
         try {
             checkOpen(); // closed while this publish waited for its turn: write nothing
             UUID wrote = client.jdbc().transaction("publish to topic " + topic, connection -> {
-                lockTopic(connection, topic);
+                lockTopic(connection, topic, client.lockTimeoutMillis());
                 UUID stored = PostgresMessages.lastId(connection, topic);
                 UUID last = stored == null ? RawdataIds.beginningOfTime() : stored;
                 UUID known = client.written(topic);
@@ -69,7 +69,13 @@ final class PostgresRawdataProducer extends OrderedRawdataProducer {
         client.published(topic);
     }
 
-    private static void lockTopic(Connection connection, String topic) throws SQLException {
+    private static void lockTopic(Connection connection, String topic, int timeoutMillis) throws SQLException {
+        if (timeoutMillis > 0) {
+            try (PreparedStatement timeout = connection.prepareStatement("SELECT set_config('lock_timeout', ?, true)")) {
+                timeout.setString(1, timeoutMillis + "ms"); // for this transaction only
+                timeout.execute();
+            }
+        }
         try (PreparedStatement lock = connection.prepareStatement("SELECT pg_advisory_xact_lock(?, hashtext(?))")) {
             lock.setInt(1, PostgresSchema.TOPIC_LOCK);
             lock.setString(2, topic);

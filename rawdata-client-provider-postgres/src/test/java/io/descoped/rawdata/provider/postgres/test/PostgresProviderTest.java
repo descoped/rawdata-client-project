@@ -234,6 +234,53 @@ class PostgresProviderTest {
     }
 
     /**
+     * With a lock timeout, a publish that waits longer for the topic lock fails, writes nothing, and the next publish,
+     * once the lock is free, goes on as if the failed one never ran.
+     */
+    @Test
+    void aPublishGivesUpAfterTheLockTimeoutAndWritesNothing() throws Exception {
+        Map<String, String> configuration = new HashMap<>(Postgres18.configuration());
+        configuration.put("rawdata.postgres.publish.lock-timeout-ms", "200");
+        String topic = topic();
+        try (RawdataClient client = RawdataClient.create(configuration); RawdataProducer producer = client.producer(topic)) {
+            producer.publish(RawdataMessage.builder().position("before").build());
+            try (Connection holder = holdTopicLock(topic)) {
+                RawdataMessage late = RawdataMessage.builder().position("late").build();
+                RawdataException failed = assertThrows(RawdataException.class, () -> producer.publish(late));
+                assertTrue(failed.getMessage().contains("SQLState 55P03"), failed.getMessage());
+                holder.rollback();
+            }
+            producer.publish(RawdataMessage.builder().position("after").build());
+            assertEquals("after", client.lastMessage(topic).position());
+            assertEquals(2, count("SELECT count(*) FROM rawdata_message WHERE topic = '" + topic + "'"));
+        }
+    }
+
+    /**
+     * The TLS mode reaches the driver: {@code require} fails against the test server, which has no TLS, and a mode
+     * pgjdbc does not know is refused before connecting. TCP keep-alive is taken.
+     */
+    @Test
+    void theTlsModeAndKeepAliveReachTheDriver() {
+        Map<String, String> require = new HashMap<>(Postgres18.configuration());
+        require.put("postgres.driver.ssl-mode", "require");
+        RawdataException noTls = assertThrows(RawdataException.class, () -> RawdataClient.create(require));
+        assertTrue(String.valueOf(noTls.getCause()).contains("SSL"), String.valueOf(noTls.getCause()));
+        Map<String, String> unknown = new HashMap<>(Postgres18.configuration());
+        unknown.put("postgres.driver.ssl-mode", "always");
+        assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(unknown));
+        Map<String, String> plain = new HashMap<>(Postgres18.configuration());
+        plain.put("postgres.driver.ssl-mode", "disable");
+        plain.put("postgres.driver.tcp-keep-alive", "true");
+        try (RawdataClient client = RawdataClient.create(plain)) {
+            assertNull(client.lastMessage(topic()));
+        }
+        Map<String, String> notABoolean = new HashMap<>(Postgres18.configuration());
+        notABoolean.put("postgres.driver.tcp-keep-alive", "yes");
+        assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(notABoolean));
+    }
+
+    /**
      * A database failure names the operation, the topic and the SQLState, and keeps the SQL exception as the cause.
      */
     @Test

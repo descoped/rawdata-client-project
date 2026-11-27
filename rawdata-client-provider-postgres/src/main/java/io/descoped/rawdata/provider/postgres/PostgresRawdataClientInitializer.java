@@ -11,6 +11,7 @@ import io.descoped.service.provider.api.ProviderName;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * The {@code postgres} provider: topics in PostgreSQL 18. Configuration:
@@ -28,6 +29,14 @@ import java.util.Set;
  *     between polls of a topic that has nothing new</td></tr>
  *     <tr><td>{@code rawdata.postgres.consumer.wake-on-publish}</td><td>{@code true}: a publish wakes the client's
  *     waiting consumers of the topic, which read at once instead of at the next poll</td></tr>
+ *     <tr><td>{@code rawdata.postgres.publish.lock-timeout-ms}</td><td>none: how long a publish waits for the topic's
+ *     lock before it fails, writing nothing; without it, it waits as long as the holder does</td></tr>
+ *     <tr><td>{@code postgres.driver.tcp-keep-alive}</td><td>{@code false}: TCP keep-alive on the connections, so a
+ *     server that vanished is noticed by the operating system</td></tr>
+ *     <tr><td>{@code postgres.driver.ssl-mode}</td><td>pgjdbc's default, {@code prefer}: {@code disable},
+ *     {@code allow}, {@code prefer}, {@code require}, {@code verify-ca} or {@code verify-full}</td></tr>
+ *     <tr><td>{@code postgres.driver.ssl-root-cert}</td><td>none: a file of the certificates that sign the server's,
+ *     for {@code verify-ca} and {@code verify-full}</td></tr>
  * </table>
  * The tables are created in the user's default schema when they are missing; a role that may not create tables can
  * use tables created by another role. Connections are READ COMMITTED whatever the database's default, and show as
@@ -45,6 +54,11 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
     static final String PREFETCH_SIZE = "rawdata.postgres.consumer.prefetch-size";
     static final String POLL_INTERVAL = "rawdata.postgres.consumer.prefetch-poll-interval-when-empty";
     static final String WAKE_ON_PUBLISH = "rawdata.postgres.consumer.wake-on-publish";
+    static final String LOCK_TIMEOUT = "rawdata.postgres.publish.lock-timeout-ms";
+    static final String TCP_KEEP_ALIVE = "postgres.driver.tcp-keep-alive";
+    static final String SSL_MODE = "postgres.driver.ssl-mode";
+    static final String SSL_ROOT_CERT = "postgres.driver.ssl-root-cert";
+    private static final Set<String> SSL_MODES = Set.of("disable", "allow", "prefer", "require", "verify-ca", "verify-full");
     static final String APPLICATION_NAME = "rawdata-postgres";
 
     /**
@@ -69,6 +83,7 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
         int prefetchSize = positive(configuration, PREFETCH_SIZE, 100);
         int pollIntervalMillis = positive(configuration, POLL_INTERVAL, 250);
         boolean wakeOnPublish = bool(configuration, WAKE_ON_PUBLISH, true);
+        int lockTimeoutMillis = positive(configuration, LOCK_TIMEOUT, 0);
 
         HikariConfig config = new HikariConfig();
         config.setPoolName("rawdata-postgres");
@@ -79,6 +94,19 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
         config.addDataSourceProperty("password", required(configuration, PASSWORD));
         config.addDataSourceProperty("databaseName", required(configuration, DATABASE));
         config.addDataSourceProperty("ApplicationName", APPLICATION_NAME);
+        config.addDataSourceProperty("tcpKeepAlive", bool(configuration, TCP_KEEP_ALIVE, false));
+        String sslMode = configuration.get(SSL_MODE);
+        if (sslMode != null && !sslMode.isBlank()) {
+            String mode = sslMode.trim();
+            if (!SSL_MODES.contains(mode)) {
+                throw new IllegalArgumentException("Configuration '" + SSL_MODE + "' must be one of " + new TreeSet<>(SSL_MODES) + ": " + sslMode);
+            }
+            config.addDataSourceProperty("sslMode", mode);
+        }
+        String sslRootCert = configuration.get(SSL_ROOT_CERT);
+        if (sslRootCert != null && !sslRootCert.isBlank()) {
+            config.addDataSourceProperty("sslRootCert", sslRootCert.trim());
+        }
         config.setAutoCommit(false);
         // The commit order of ids relies on it: after the topic lock, the last id must be read with a fresh snapshot.
         config.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
@@ -97,7 +125,7 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
             dataSource.close();
             throw e;
         }
-        return new PostgresRawdataClient(dataSource, prefetchSize, pollIntervalMillis, wakeOnPublish);
+        return new PostgresRawdataClient(dataSource, prefetchSize, pollIntervalMillis, wakeOnPublish, lockTimeoutMillis);
     }
 
     private static String required(Map<String, String> configuration, String key) {

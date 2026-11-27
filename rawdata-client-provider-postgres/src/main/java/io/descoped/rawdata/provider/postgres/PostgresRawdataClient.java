@@ -39,6 +39,7 @@ final class PostgresRawdataClient implements RawdataClient {
     private final int prefetchSize;
     private final long pollIntervalMillis;
     private final boolean wakeOnPublish;
+    private final int lockTimeoutMillis; // 0: a publish waits for the topic lock as long as it is held
     private final AtomicBoolean closed = new AtomicBoolean();
     private final Set<Object> open = ConcurrentHashMap.newKeySet(); // producers and consumers
     private final Map<String, UUID> written = new ConcurrentHashMap<>(); // the last id this client wrote of each topic
@@ -49,8 +50,10 @@ final class PostgresRawdataClient implements RawdataClient {
         return thread;
     });
 
-    PostgresRawdataClient(HikariDataSource dataSource, int prefetchSize, long pollIntervalMillis, boolean wakeOnPublish) {
+    PostgresRawdataClient(HikariDataSource dataSource, int prefetchSize, long pollIntervalMillis, boolean wakeOnPublish,
+                          int lockTimeoutMillis) {
         this.wakeOnPublish = wakeOnPublish;
+        this.lockTimeoutMillis = lockTimeoutMillis;
         this.dataSource = dataSource;
         this.jdbc = new Jdbc(dataSource, this::isClosed);
         this.prefetchSize = prefetchSize;
@@ -171,6 +174,10 @@ final class PostgresRawdataClient implements RawdataClient {
                 consumer.wake();
             }
         }
+    }
+
+    int lockTimeoutMillis() {
+        return lockTimeoutMillis;
     }
 
     ExecutorService executor() {

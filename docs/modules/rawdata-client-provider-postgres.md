@@ -343,6 +343,10 @@ Pass these keys in the map given to `RawdataClient.create`. The whole map goes t
 | `rawdata.postgres.consumer.prefetch-size` | `100` | most messages a consumer reads per query; a positive whole number |
 | `rawdata.postgres.consumer.prefetch-poll-interval-when-empty` | `250` | milliseconds a consumer that found nothing waits before it queries again; a positive whole number |
 | `rawdata.postgres.consumer.wake-on-publish` | `true` | whether a publish wakes the same client's waiting consumers of the topic, which then query at once; `true` or `false` |
+| `rawdata.postgres.publish.lock-timeout-ms` | none | milliseconds a publish waits for the topic lock before it fails with `RawdataException` (SQLState `55P03`), writing nothing; a positive whole number. Without it, a publish waits as long as the lock is held |
+| `postgres.driver.tcp-keep-alive` | `false` | TCP keep-alive on the connections, so the operating system notices a server or network that vanished; `true` or `false` |
+| `postgres.driver.ssl-mode` | pgjdbc's, `prefer` | `disable`, `allow`, `prefer`, `require`, `verify-ca` or `verify-full`, as pgjdbc's `sslmode`. Only `verify-ca` and `verify-full` check the server's certificate |
+| `postgres.driver.ssl-root-cert` | pgjdbc's | the file of certificates that sign the server's, for `verify-ca` and `verify-full`, as pgjdbc's `sslrootcert` |
 
 Fixed settings, not configurable: auto-commit off, READ COMMITTED, `ApplicationName=rawdata-postgres`, pool name
 `rawdata-postgres`, and HikariCP's defaults for everything else (for example, a caller waits at most 30 seconds for
@@ -357,6 +361,14 @@ Choosing values:
   the messages' content. Lower it for large messages; raise it for many small ones read in bulk.
 - **`prefetch-poll-interval-when-empty`** trades latency for load. Each consumer that has caught up runs one query per
   interval.
+- **`lock-timeout-ms`** bounds how long a publish waits behind another holder of the topic lock, for example a frozen
+  old instance of the writer. The failed publish wrote nothing, so it can be retried; under contention, a short
+  timeout fails publishes that would only have waited their turn. No timeout cuts a statement that is already running:
+  a cut commit could leave the client unsure whether it wrote, and its next publish would report a writer conflict.
+- **`tcp-keep-alive`** lets a connection to a server that vanished fail, instead of waiting for TCP's own timeouts,
+  without limiting slow queries.
+- **`ssl-mode`**: `prefer`, pgjdbc's default, encrypts when the server offers it but checks no certificate; use
+  `verify-full` with `ssl-root-cert` to be sure of the server.
 - **`wake-on-publish`** gives a consumer of the same client a publish at once. It costs a query per publish for each
   consumer of the topic that waits: on a quiet topic, as many queries as publishes; on a busy one, consumers seldom
   wait. Set it to `false` to bound the queries by the poll interval alone.
@@ -476,7 +488,8 @@ and each test uses topics of its own. They run on the class path, where the prov
   failed publish writes no message and no content; topics are rows, not tables; missing configuration is reported;
   closing a client closes its connections; a publish that waited for its turn writes nothing once its producer
   closed, and one under way when the client closes is reported closed and writes nothing; a database failure names
-  the operation and the SQLState; a publish wakes the client's waiting consumers unless configured off.
+  the operation and the SQLState; a publish wakes the client's waiting consumers unless configured off; a publish
+  gives up after the lock timeout, writing nothing; the TLS mode and keep-alive reach the driver.
 
 Run them with:
 

@@ -91,7 +91,7 @@ public final class GcsRawdataClientInitializer implements RawdataClientInitializ
         return new AvroRawdataClient(new GcsAvroStore(client, bucket, prefix), window, pollInterval);
     }
 
-    private static GcsCredentials credentials(Map<String, String> configuration, HttpClient http) {
+    static GcsCredentials credentials(Map<String, String> configuration, HttpClient http) {
         CredentialProvider kind = AvroConfiguration.enumValue(configuration, CREDENTIALS, CredentialProvider.class,
                 CredentialProvider.SERVICE_ACCOUNT);
         try {

@@ -470,6 +470,7 @@ Things to keep in mind:
 | `GcsClientTest` | retries, statuses, the CRC32C header, name encoding, paging, token retries and the 401 refresh | a local `jdk.httpserver` playing GCS |
 | `GcsIntegrityTest` | the lost-response check by size and CRC32C, and timeouts reported as throttling | a local server, and an HTTP client that always times out |
 | `GcsCredentialsTest` | the JWT, refresh tokens, the metadata server, token lifetimes, Application Default Credentials in Google's order, refused file types | a local server playing Google's token endpoint and the metadata server |
+| `GcsLiveContractTest` | the provider contract, unchanged | a real bucket, only with `-Drawdata.gcs.live=true` |
 
 The tests run on the class path, because Testcontainers' dependencies are automatic modules with split packages; the
 JPMS smoke test (`src/it/jpms/run.sh`) covers the module path against a fake GCS. They need Docker. Run them with:
@@ -478,7 +479,17 @@ JPMS smoke test (`src/it/jpms/run.sh`) covers the module path against a fake GCS
 ./mvnw -pl rawdata-client-provider-gcs -am verify
 ```
 
-A real bucket with real credentials is checked by hand before a release.
+The **live tests** run the contract against a real bucket, only with `-Drawdata.gcs.live=true`; CI never runs them.
+The bucket is `-Drawdata.gcs.live.bucket` (required). Credentials are `application-default`: point
+`GOOGLE_APPLICATION_CREDENTIALS` at the credentials meant for the tests. `-Drawdata.gcs.live.credential-provider` and
+`-Drawdata.gcs.live.key-file` choose others.
+
+```sh
+GOOGLE_APPLICATION_CREDENTIALS=<file> ./mvnw verify -pl rawdata-client-provider-gcs -am \
+    -Drawdata.gcs.live=true -Drawdata.gcs.live.bucket=<bucket>
+```
+
+A run writes under `rawdata-client-test/<random>/` and removes it afterwards.
 
 ### Testing code that uses the provider
 

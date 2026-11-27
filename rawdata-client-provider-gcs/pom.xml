@@ -38,7 +38,7 @@
             </plugin>
             <!-- The tests run a fake GCS server in Docker through Testcontainers, whose dependencies are automatic
                  modules with split packages, so they run on the class path. The module path is covered by the JPMS
-                 smoke test. -->
+                 smoke test. The live tests against Google run only with -Drawdata.gcs.live=true. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>

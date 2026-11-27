@@ -74,6 +74,7 @@ final class AvroTopicWriter {
     private static final String OPEN_SUFFIX = ".window.avro";
     private static final String SEALED_SUFFIX = ".sealed.avro";
     private static final String INVALID_SUFFIX = ".invalid";
+    private static final String RESEAL_SUFFIX = ".reseal.tmp";
     private static final String LOCK_FILE = ".lock";
     private static final String OF_TOPIC = " of topic ";
     private static final String CLOSING = "Closing the upload window" + OF_TOPIC;
@@ -744,6 +745,11 @@ final class AvroTopicWriter {
 
     private void recover() throws IOException {
         tail = client.tail(topic);
+        try (Stream<Path> files = Files.list(folder)) {
+            for (Path file : files.filter(file -> file.getFileName().toString().endsWith(RESEAL_SUFFIX)).toList()) {
+                Files.delete(file); // a reseal cut short: the window it was made from is still there
+            }
+        }
         List<Path> leftovers;
         try (Stream<Path> files = Files.list(folder)) {
             leftovers = files.filter(file -> {
@@ -779,33 +785,70 @@ final class AvroTopicWriter {
             Files.delete(file); // nothing was appended, or nothing of it reached the disk
             return true;
         }
-        byte[] content = sealed && leftover.complete()
+        boolean unchanged = sealed && leftover.complete();
+        byte[] content = unchanged
                 ? Files.readAllBytes(file)
                 : AvroSegments.encode(leftover.messages(), leftover.segment(), leftover.previousId(), settings.syncInterval());
-        UUID lastId = leftover.previousId();
-        for (RawdataMessage message : leftover.messages()) {
-            lastId = AvroSegments.greatest(lastId, message.id());
+        boolean follows = leftover.segment() == tail.segment() + 1 && leftover.previousId().equals(tail.lastId());
+        if (follows && !unchanged) {
+            // Kept as the sealed window before it is uploaded: after a crash between the upload and the file's removal,
+            // the next start finds these bytes in the store and only removes the file. A window that does not follow
+            // keeps its own bytes; one whose segment turns out taken is kept as resealed.
+            file = reseal(file, leftover.segment(), content);
+            sealed = true;
         }
         if (leftover.segment() <= tail.segment()) {
-            Optional<byte[]> stored = store.read(topic, leftover.segment());
-            if (sealed && stored.isPresent() && Arrays.equals(stored.get(), content)) {
+            if (sealed && storedAlready(leftover.segment(), content)) {
                 Files.delete(file); // uploaded before the crash; only its removal was lost
                 return true;
             }
-        } else if (leftover.segment() == tail.segment() + 1 && leftover.previousId().equals(tail.lastId())
-                && store.create(topic, leftover.segment(), content)) {
-            LOG.log(System.Logger.Level.INFO, "Uploaded segment " + leftover.segment() + OF_TOPIC + topic
-                    + " that a crash left in " + file + " (" + leftover.messages().size() + " messages"
-                    + (leftover.complete() ? "" : ", a torn last block left out") + ")");
-            Files.delete(file);
-            tail = new AvroRawdataClient.Tail(leftover.segment(), lastId);
-            client.uploaded(topic, tail);
+        } else if (follows && store.create(topic, leftover.segment(), content)) {
+            recovered(file, leftover);
             return true;
         }
         LOG.log(System.Logger.Level.ERROR, "The window " + file + OF_TOPIC + topic + " that a crash left does not "
                 + "follow the topic's end (another process wrote the topic); it is kept as " + file.getFileName() + INVALID_SUFFIX);
         invalidate(file);
         return false;
+    }
+
+    private boolean storedAlready(long segment, byte[] content) throws IOException {
+        Optional<byte[]> stored = store.read(topic, segment);
+        return stored.isPresent() && Arrays.equals(stored.get(), content);
+    }
+
+    /**
+     * A leftover window is uploaded as the topic's next segment: its file is removed and the tail moves to it.
+     */
+    private void recovered(Path file, AvroSegments.Leftover leftover) throws IOException {
+        LOG.log(System.Logger.Level.INFO, "Uploaded segment " + leftover.segment() + OF_TOPIC + topic
+                + " that a crash left in " + file + " (" + leftover.messages().size() + " messages"
+                + (leftover.complete() ? "" : ", a torn last block left out") + ")");
+        Files.delete(file);
+        UUID lastId = leftover.previousId();
+        for (RawdataMessage message : leftover.messages()) {
+            lastId = AvroSegments.greatest(lastId, message.id());
+        }
+        tail = new AvroRawdataClient.Tail(leftover.segment(), lastId);
+        client.uploaded(topic, tail);
+    }
+
+    /**
+     * Replaces a leftover window with the given bytes, sealed, forced to disk. Each step is an atomic rename, so the
+     * folder holds the old window or the new, never both and never a part.
+     */
+    private Path reseal(Path file, long segment, byte[] content) throws IOException {
+        Path temporary = folder.resolve(name(segment) + RESEAL_SUFFIX);
+        try (FileOutputStream out = new FileOutputStream(temporary.toFile())) {
+            out.write(content);
+            out.getFD().sync();
+        }
+        Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE); // replaces the window
+        Path sealed = folder.resolve(name(segment) + SEALED_SUFFIX);
+        if (!sealed.equals(file)) {
+            Files.move(file, sealed, StandardCopyOption.ATOMIC_MOVE);
+        }
+        return sealed;
     }
 
     private void invalidate(Path file) {

@@ -229,6 +229,7 @@ Next to `.lock` you may see the window files:
 | `<segment>.window.avro` | the open window, being filled |
 | `<segment>.sealed.avro` | a closed window, waiting for upload |
 | `<segment>.window.avro.invalid`, `<segment>.sealed.avro.invalid` | set aside after another writer was found; never uploaded, never deleted |
+| `<segment>.reseal.tmp` | recovery rewriting a crash's open window as sealed; removed at the next start if a crash left it |
 
 A client that only reads never takes the lock and writes nothing there. It still needs `local-temp-folder` in its
 configuration, because the key is required.

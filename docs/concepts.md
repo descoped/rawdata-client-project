@@ -479,6 +479,7 @@ A window file's name shows its state, in `local-temp-folder/<topic folder>/`:
 | `<segment>.window.avro` | open: publishes append to it |
 | `<segment>.sealed.avro` | sealed: closed, forced to disk, waiting for or in its upload |
 | `*.invalid` | set aside after a writer conflict; never uploaded, never deleted |
+| `<segment>.reseal.tmp` | recovery rewriting a crash's open window as sealed; removed at the next start if a crash left it |
 | `.lock` | the writer's lock: one client per buffer folder and topic |
 
 Inside a window, each publish call is one Avro block, written to the file before the call returns, so a call that

@@ -205,6 +205,21 @@ class SpiBaseClassesTest {
         assertNull(consumer.receive(50, TimeUnit.MILLISECONDS), "the buffered message is gone");
     }
 
+    /**
+     * A read that fails after {@code receiveUpTo} took its first messages returns them; the next receive sees the
+     * failure.
+     */
+    @Test
+    void receiveUpToKeepsWhatItTookWhenALaterReadFails() throws Exception {
+        QueueConsumer consumer = new QueueConsumer(10);
+        RawdataMessage a = message("a");
+        consumer.store.add(a);
+        IllegalStateException failure = new IllegalStateException("store failed");
+        consumer.duringFill = () -> consumer.failure = failure; // the next read fails
+        assertEquals(List.of(a), consumer.receiveUpTo(10, java.time.Duration.ofSeconds(1)));
+        assertSame(failure, assertThrows(IllegalStateException.class, () -> consumer.receive(0, TimeUnit.SECONDS)));
+    }
+
     @Test
     void aFailedReadIsReportedOrSeenAsClosed() {
         QueueConsumer consumer = new QueueConsumer(10);

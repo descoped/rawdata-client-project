@@ -107,11 +107,11 @@ final class RawdataDefaultMessage implements RawdataMessage {
 
     @Override
     public int hashCode() {
-        int hash = Objects.hash(id, orderingGroup, sequenceNumber, position);
+        int content = 0; // a sum, so the order of the keys does not count, as in equals
         for (Map.Entry<String, byte[]> entry : data.entrySet()) {
-            hash = 31 * hash + entry.getKey().hashCode() * 17 + Arrays.hashCode(entry.getValue());
+            content += entry.getKey().hashCode() ^ Arrays.hashCode(entry.getValue());
         }
-        return hash;
+        return 31 * Objects.hash(id, orderingGroup, sequenceNumber, position) + content;
     }
 
     @Override

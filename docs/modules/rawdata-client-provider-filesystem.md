@@ -283,7 +283,7 @@ publish(m1, m2)                                   background upload thread
 ```
 
 1. `publish` appends the call's messages to the topic's open window in the buffer folder. A call is always written
-   whole into one window. The call is one Avro block, forced to disk before `publish` returns.
+   whole into one window. The call is one Avro block, written to the file before `publish` returns.
 2. The window closes when it is `avro-file.max.seconds` old, when it reaches `avro-file.max.bytes`, or when a
    producer of the topic closes. It is forced to disk and renamed `.sealed.avro`.
 3. A background thread uploads sealed windows one at a time, in segment order: the store writes the temporary file and
@@ -307,7 +307,8 @@ engine](rawdata-client-provider-avro.md#how-it-works) page.
   disk. When a writer of the topic starts again, it uploads what belongs right after the topic's end, cut back to its
   complete blocks, and sets aside what no longer belongs. A temporary `.*.tmp` file in a topic folder can also be
   left, when the crash came between writing it and linking it. Nothing reads it, and it may be deleted.
-- **What survives a crash of the machine.** The buffer's blocks and sealed windows are forced to disk (`fsync`). The
+- **What survives a crash of the machine.** The buffer is forced to disk (`fsync`) every `avro-file.sync.interval`
+  bytes, and sealed windows when they seal; the calls since the last force may be lost. The
   store's own writes are not: the segment's temporary file, the hard link and metadata files are written through the
   operating system's cache, without `fsync` of the file or its folder. Once the sealed window has been removed from the
   buffer, a power loss before the operating system writes its cache can lose a segment that was already visible.
@@ -353,7 +354,7 @@ is an `IllegalArgumentException` that names its key.
 | `listing.min-interval-seconds` | `1` | how often a waiting consumer looks for the next segment, in whole seconds; `0` as often as `receive` asks (at least 10 ms apart) |
 | `avro-file.max.seconds` | `60` | the longest a window stays open before it is uploaded |
 | `avro-file.max.bytes` | `67108864` (64 MiB) | the size at which a window closes |
-| `avro-file.sync.interval` | `524288` (512 KiB) | the block size Avro's buffer is sized for; every publish call ends its own block, forced to disk |
+| `avro-file.sync.interval` | `524288` (512 KiB) | the block size Avro's buffer is sized for; every publish call ends its own block, written to the file; the file is forced to disk every this many bytes |
 | `avro-file.max.pending-uploads` | `4` | sealed windows that may wait for upload before `publish` waits |
 | `avro-file.close-timeout-seconds` | `30` | the longest `close()` of a producer or the client waits for the uploads |
 | `avro-file.upload.max-concurrency` | `16` | the most uploads of a client at once, across its topics |

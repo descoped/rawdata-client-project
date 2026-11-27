@@ -481,8 +481,9 @@ A window file's name shows its state, in `local-temp-folder/<topic folder>/`:
 | `*.invalid` | set aside after a writer conflict; never uploaded, never deleted |
 | `.lock` | the writer's lock: one client per buffer folder and topic |
 
-Inside a window, each publish call is one Avro block, forced to disk before the call returns, so a call that returned
-survives a crash of the process. It costs one disk sync per call; publish in batches when that matters.
+Inside a window, each publish call is one Avro block, written to the file before the call returns, so a call that
+returned survives a crash of the process. The file is forced to disk every `avro-file.sync.interval` bytes, not per
+call, so a crash of the machine loses the calls written since: about that much, more after a larger call.
 
 **Why.** An object per publish would cost a request each, make consumers read millions of small objects, and fill a
 bucket with them. A window turns a stream of small publishes into a few large files, which are cheap to store and fast
@@ -559,8 +560,8 @@ download. Pinning protects a reader from a segment replaced by hand while it rea
 
 ### Crash recovery
 
-**What.** A crash of the writing process loses only a call that had not returned, because every call is forced to
-disk before it returns. When a writer of the topic starts again on the same `local-temp-folder`, creating its first
+**What.** A crash of the writing process loses only a call that had not returned, because every call is written to
+the file before it returns. When a writer of the topic starts again on the same `local-temp-folder`, creating its first
 producer of the topic looks at what the crash left, in segment order, before `producer` returns:
 
 - a sealed window is uploaded unchanged, or removed if the store already has it with the same bytes;
@@ -692,7 +693,7 @@ else writes the target topic.
 | AIMD | additive increase, multiplicative decrease: how a client adapts its concurrent uploads | [Throttling and AIMD](#throttling-and-aimd) |
 | `AvroRawdataClient` | the Avro engine's client, shared by `filesystem`, `gcs` and `s3` | [Avro engine](modules/rawdata-client-provider-avro.md) |
 | `AvroStore` | the backend interface a provider on the Avro engine implements | [Avro engine: the store](modules/rawdata-client-provider-avro.md#the-store-avrostore) |
-| block | an Avro block in a window: one per publish call, forced to disk before the call returns | [The upload window](#the-upload-window) |
+| block | an Avro block in a window: one per publish call, written to the file before the call returns | [The upload window](#the-upload-window) |
 | BOM | `rawdata-client-bom`, which pins the version of every rawdata library module | [BOM](modules/rawdata-client-bom.md) |
 | checkpoint | a metadata entry holding the id of the last message a consumer handled | [Metadata](#metadata) |
 | client | `RawdataClient`, a connection to one store | [Client](#client) |

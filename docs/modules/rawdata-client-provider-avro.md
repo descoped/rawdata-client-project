@@ -137,9 +137,10 @@ A window file goes through three states, visible in its name:
 
 ### Block
 
-Inside a window, messages are written in Avro **blocks**, one per publish call: the call ends its block and forces
-it to disk before it returns. A block therefore holds one whole call, and a call that returned survives a crash of
-the process. `avro-file.sync.interval` sizes Avro's block buffer and the blocks of a window rewritten by recovery;
+Inside a window, messages are written in Avro **blocks**, one per publish call: the call ends its block and writes
+it to the file before it returns. A block therefore holds one whole call, and a call that returned survives a crash of
+the process. `avro-file.sync.interval` sizes Avro's block buffer and the blocks of a window rewritten by recovery,
+and is how much is written between forcing the file to disk;
 the size is the engine's estimate of a message's encoded size (16 bytes of
 id, the position, the ordering group and each content entry's key and bytes), as 2.x estimated it.
 
@@ -238,9 +239,10 @@ store at once and is visible when it returns.
    the messages without an id a UUIDv7 id after the topic's greatest id, and keeps given ids. It leaves out a message
    already in the topic and refuses a different one under a taken id ([Unique ids](#unique-ids)). It appends the
    whole call to the open window, opening one if there is none. A call always goes into one window whole, never split across two.
-2. **End of block.** The call ends its block: the block is written and forced to disk before `publish` returns. One
-   disk sync per call, so a writer that publishes one message per call is bound by the disk's sync latency; publish
-   in batches if that matters.
+2. **End of block.** The call ends its block: the block is written to the file before `publish` returns, which the
+   operating system keeps if the process crashes. Once `avro-file.sync.interval` bytes are written since the last
+   force, the file is forced to disk, so a crash of the machine loses the calls written since: about that much, more after a larger call. Never through the file's
+   NIO channel, which an interrupted publisher would close.
 3. **Window closes.** The window is closed (sealed) when, after a call, it is at least `avro-file.max.bytes`; when a
    timer finds it `avro-file.max.seconds` old (so a producer that goes quiet still uploads; a publish to a window
    that old also seals it first); when a producer of the topic closes; or on `flush` and client close. An empty
@@ -258,7 +260,7 @@ store at once and is visible when it returns.
 
 | After | Visible to consumers | Survives a crash of the process |
 |---|---|---|
-| `publish` returns | no | yes, on the local disk (its block is forced to disk); the next writer uploads it |
+| `publish` returns | no | yes, in the buffer file (its block is written); the next writer uploads it |
 | the window is sealed | no | yes, on the local disk; the next writer uploads it |
 | the window is uploaded | yes, in every process | yes, in the store |
 
@@ -363,9 +365,8 @@ messages:
   open window (640 KiB at the default), so a very large interval means a large buffer per topic.
 - **Disk.** Each topic needs room for its open window and up to `avro-file.max.pending-uploads` sealed windows:
   about 5 × 64 MiB per topic at the defaults.
-- **Disk syncs.** Every publish call is forced to disk: about 0.05–0.5 ms on a local SSD, 1–5 ms on network block
-  storage. A writer of one message per call is bound by that; batch calls pay it once. Each call's block also adds
-  about 20 bytes of Avro framing to the segment.
+- **Writes and disk syncs.** Every publish call is one write to the file, and every `avro-file.sync.interval` bytes
+  one disk sync. Each call's block adds about 20 bytes of Avro framing to the segment.
 
 ## The store: `AvroStore`
 
@@ -417,7 +418,8 @@ random sync marker, so equal bytes on a retry mean the write was yours.
 
 ## Recovery after a crash
 
-Each publish call is forced to disk before it returns, so a crash loses only a call that had not returned. When a
+Each publish call is written to the file before it returns, so a crash of the process loses only a call that had
+not returned. When a
 writer of the topic starts again (when a new client creates its first producer of the topic, before `producer`
 returns), it looks at the windows the crash left, in segment order:
 

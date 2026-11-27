@@ -307,7 +307,7 @@ missing.
 | `local-temp-folder` | | Required. Where producers buffer windows: a local disk, one folder per process. |
 | `avro-file.max.seconds` | `60` | The longest a window stays open. |
 | `avro-file.max.bytes` | `67108864` (64 MiB) | The size at which a window closes. |
-| `avro-file.sync.interval` | `524288` (512 KiB) | The block size Avro's buffer is sized for; every publish call ends its own block, forced to disk. |
+| `avro-file.sync.interval` | `524288` (512 KiB) | The block size Avro's buffer is sized for; every publish call ends its own block, written to the file; the file is forced to disk every this many bytes. |
 | `avro-file.max.pending-uploads` | `4` | Sealed windows of a topic that may wait for upload before `publish` waits. |
 | `avro-file.close-timeout-seconds` | `30` | The longest `close()` waits for the uploads. |
 | `avro-file.upload.max-concurrency` | `16` | The most uploads of a client at once, across its topics. |

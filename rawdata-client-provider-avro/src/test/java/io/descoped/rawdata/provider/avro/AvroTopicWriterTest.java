@@ -12,6 +12,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +21,9 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
@@ -52,6 +56,9 @@ class AvroTopicWriterTest {
         volatile Outcome outcome = Outcome.CREATE;
         volatile boolean gated;
         volatile boolean gatedAfterCreate; // the segment is stored, the upload not yet done
+        volatile String slowTopic; // looking up this topic's segments waits for slowRelease
+        final CountDownLatch slowEntered = new CountDownLatch(1);
+        final CountDownLatch slowRelease = new CountDownLatch(1);
 
         @Override
         public boolean create(String topic, long segment, byte[] content) throws IOException {
@@ -108,7 +115,11 @@ class AvroTopicWriterTest {
         }
 
         @Override
-        public boolean exists(String topic, long segment) {
+        public boolean exists(String topic, long segment) throws IOException {
+            if (topic.equals(slowTopic)) {
+                slowEntered.countDown();
+                await(slowRelease);
+            }
             return segments.containsKey(topic + "/" + segment);
         }
 
@@ -144,6 +155,13 @@ class AvroTopicWriterTest {
 
     private static RawdataMessage message(String position, int size) {
         return RawdataMessage.builder().position(position).put("payload", new byte[size]).build();
+    }
+
+    private List<String> leftoverPositions() throws IOException {
+        List<String> windows = files();
+        assertEquals(1, windows.size(), "one open window: " + windows);
+        AvroSegments.Leftover leftover = AvroSegments.readLeftover(folder.resolve("t").resolve(windows.get(0)));
+        return leftover.messages().stream().map(RawdataMessage::position).toList();
     }
 
     private List<String> files() throws IOException {
@@ -303,5 +321,108 @@ class AvroTopicWriterTest {
         }
         assertEquals(List.of(), files());
         assertEquals(Set.of("t/0"), store.segments.keySet());
+    }
+
+    /**
+     * Every call that returned is in the window file, written whole, also the calls since the file was last forced to
+     * disk: what a crash of the process leaves for the next writer. Calls larger and smaller than the sync interval.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void everyReturnedCallIsInTheWindowFileWithoutASyncPerCall() throws Exception {
+        GatedStore store = new GatedStore();
+        try (AvroRawdataClient client = new AvroRawdataClient(store,
+                new AvroUploadWindow(folder, 3600, 1L << 30, 256, 4, 30, 16), 10)) {
+            RawdataProducer producer = client.producer("t");
+            List<String> published = new ArrayList<>();
+            for (int call = 0; call < 7; call++) {
+                List<RawdataMessage> batch = new ArrayList<>();
+                int size = call % 2 == 0 ? 10 : 1; // ten messages of 100 bytes pass 256 and force; one does not
+                for (int i = 0; i < size; i++) {
+                    batch.add(message("c" + call + "-" + i, 100));
+                    published.add("c" + call + "-" + i);
+                }
+                producer.publish(batch);
+                assertEquals(published, leftoverPositions(), "call " + call + " is in the file when it returns");
+            }
+        }
+    }
+
+    /**
+     * A thread with its interrupt flag set publishes, forces the file and seals windows like any other: the window
+     * file is never written through an NIO channel, which an interrupted thread closes. The flag is kept, and the
+     * writer goes on.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void anInterruptedPublisherWritesForcesAndSealsAndTheWriterGoesOn() throws Exception {
+        GatedStore store = new GatedStore();
+        try (AvroRawdataClient client = new AvroRawdataClient(store,
+                new AvroUploadWindow(folder, 3600, 4000, 64, 4, 30, 16), 10)) {
+            RawdataProducer producer = client.producer("t");
+            Thread.currentThread().interrupt();
+            try {
+                producer.publish(message("forced", 100)); // past the sync interval: the file is forced
+                producer.publish(message("sealed", 5000)); // past the size: the window is sealed
+                assertTrue(Thread.currentThread().isInterrupted(), "the interrupt is kept");
+            } finally {
+                Thread.interrupted();
+            }
+            producer.publish(message("after", 10));
+            client.flush("t");
+            assertEquals("after", client.lastMessage("t").position());
+            assertEquals(Set.of("t/0", "t/1"), store.segments.keySet());
+        }
+    }
+
+    /**
+     * Starting a topic's writer reads the store and may upload what a crash left: a slow store there holds up only
+     * that topic, never the producers of other topics, also one whose writer shares the slot of the client's map of
+     * writers.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void aSlowWriterStartHoldsUpOnlyItsOwnTopic() throws Exception {
+        GatedStore store = new GatedStore();
+        String other = sharesTheMapSlotWith("slow");
+        store.slowTopic = "slow";
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try (AvroRawdataClient client = client(store, 1 << 20, 4)) {
+            Future<RawdataProducer> slow = executor.submit(() -> client.producer("slow"));
+            try {
+                assertTrue(store.slowEntered.await(10, TimeUnit.SECONDS));
+                Future<?> otherPublished = executor.submit(() -> {
+                    client.producer(other).publish(message("a", 1));
+                    return null;
+                });
+                otherPublished.get(10, TimeUnit.SECONDS); // done while the slow topic's writer starts
+                assertFalse(slow.isDone());
+            } finally {
+                store.slowRelease.countDown(); // before the client closes, also when the test fails
+            }
+            slow.get(10, TimeUnit.SECONDS).publish(message("b", 1));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * A topic that a small {@link ConcurrentHashMap} puts in the same slot as the given one.
+     */
+    private static String sharesTheMapSlotWith(String topic) {
+        for (int i = 0; ; i++) {
+            String candidate = "t" + i;
+            if (slot(candidate) == slot(topic)) {
+                return candidate;
+            }
+        }
+    }
+
+    private static int slot(String key) {
+        int h = key.hashCode();
+        return (h ^ (h >>> 16)) & 15; // ConcurrentHashMap's spread, in its first table of 16
     }
 }

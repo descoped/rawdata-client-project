@@ -785,17 +785,17 @@ final class AvroTopicWriter {
             Files.delete(file); // nothing was appended, or nothing of it reached the disk
             return true;
         }
-        byte[] content;
-        if (sealed && leftover.complete()) {
-            content = Files.readAllBytes(file);
-        } else {
-            content = AvroSegments.encode(leftover.messages(), leftover.segment(), leftover.previousId(), settings.syncInterval());
-            if (leftover.segment() > tail.segment()) {
-                // Kept as the sealed window before it is uploaded: after a crash between the upload and the file's
-                // removal, the next start finds these bytes in the store and only removes the file.
-                file = reseal(file, leftover.segment(), content);
-                sealed = true;
-            }
+        boolean unchanged = sealed && leftover.complete();
+        byte[] content = unchanged
+                ? Files.readAllBytes(file)
+                : AvroSegments.encode(leftover.messages(), leftover.segment(), leftover.previousId(), settings.syncInterval());
+        boolean follows = leftover.segment() == tail.segment() + 1 && leftover.previousId().equals(tail.lastId());
+        if (follows && !unchanged) {
+            // Kept as the sealed window before it is uploaded: after a crash between the upload and the file's removal,
+            // the next start finds these bytes in the store and only removes the file. A window set aside keeps its
+            // own bytes.
+            file = reseal(file, leftover.segment(), content);
+            sealed = true;
         }
         UUID lastId = leftover.previousId();
         for (RawdataMessage message : leftover.messages()) {
@@ -807,8 +807,7 @@ final class AvroTopicWriter {
                 Files.delete(file); // uploaded before the crash; only its removal was lost
                 return true;
             }
-        } else if (leftover.segment() == tail.segment() + 1 && leftover.previousId().equals(tail.lastId())
-                && store.create(topic, leftover.segment(), content)) {
+        } else if (follows && store.create(topic, leftover.segment(), content)) {
             LOG.log(System.Logger.Level.INFO, "Uploaded segment " + leftover.segment() + OF_TOPIC + topic
                     + " that a crash left in " + file + " (" + leftover.messages().size() + " messages"
                     + (leftover.complete() ? "" : ", a torn last block left out") + ")");

@@ -30,6 +30,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -527,6 +528,26 @@ class AvroTopicWriterTest {
         }
         assertEquals(Set.of("t/0", "t/1"), store.segments.keySet());
         assertEquals(List.of(), files());
+    }
+
+    /**
+     * An open window that does not follow the topic's end (here a gap: segment 1 of an empty topic) is set aside with
+     * its own bytes, not rewritten first.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void aWindowThatDoesNotFollowIsSetAsideWithItsOwnBytes() throws Exception {
+        Path topic = Files.createDirectories(folder.resolve("t"));
+        RawdataMessage left = RawdataMessage.builder().id(RawdataIds.generate()).position("left").build();
+        byte[] window = AvroSegments.encode(List.of(left), 1, RawdataIds.beginningOfTime(), 64);
+        Files.write(topic.resolve("0000000000000000001.window.avro"), window);
+        GatedStore store = new GatedStore();
+        try (AvroRawdataClient client = client(store, 1 << 20, 4)) {
+            assertThrows(RawdataWriterConflictException.class, () -> client.producer("t"));
+        }
+        assertEquals(List.of("0000000000000000001.window.avro.invalid"), files());
+        assertArrayEquals(window, Files.readAllBytes(topic.resolve("0000000000000000001.window.avro.invalid")));
     }
 
     /**

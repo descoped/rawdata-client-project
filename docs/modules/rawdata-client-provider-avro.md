@@ -131,6 +131,7 @@ A window file goes through three states, visible in its name:
 | `<segment>.window.avro` | **open**: publishes append to it |
 | `<segment>.sealed.avro` | **sealed**: closed, forced to disk, its summary filled in, waiting for (or in) its upload |
 | `<segment>.window.avro.invalid`, `<segment>.sealed.avro.invalid` | **set aside**: it no longer belongs to the topic (another writer went on); never uploaded, never deleted |
+| `<segment>.reseal.tmp` | recovery rewriting a crash's open window as sealed; one left by a crash is removed at the next start |
 | `.lock` | the writer's lock on the folder |
 
 `<segment>` is the segment number in 19 digits, so the names sort in segment order.

@@ -312,10 +312,14 @@ class AvroTopicWriterTest {
         try (AvroRawdataClient client = client(store, 1 << 20, 4)) {
             RawdataProducer producer = client.producer("t");
             producer.publish(message("a", 1));
+            Thread closing = Thread.currentThread();
             Thread releaser = new Thread(() -> {
                 try {
+                    long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
                     if (store.uploading.await(10, TimeUnit.SECONDS)) {
-                        Thread.sleep(200); // the close is waiting by now
+                        while (closing.getState() != Thread.State.TIMED_WAITING && System.nanoTime() < end) {
+                            Thread.onSpinWait(); // until the close waits for the upload
+                        }
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();

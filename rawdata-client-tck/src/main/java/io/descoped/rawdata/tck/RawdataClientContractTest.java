@@ -748,6 +748,25 @@ public abstract class RawdataClientContractTest {
     }
 
     /**
+     * An asynchronous receive that is cancelled, or times out, before a message comes takes no message: the
+     * consumer's next receives get every message, in order.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    public void aCancelledOrTimedOutAsynchronousReceiveLosesNoMessage() throws Exception {
+        try (RawdataConsumer consumer = client.consumer(topic)) {
+            consumer.receiveAsync().cancel(false);
+            CompletableFuture<? extends RawdataMessage> timedOut = consumer.receiveAsync().orTimeout(50, TimeUnit.MILLISECONDS);
+            ExecutionException expired = assertThrows(ExecutionException.class, () -> timedOut.get(30, TimeUnit.SECONDS));
+            assertInstanceOf(TimeoutException.class, expired.getCause());
+            publish("a", "b");
+            awaitPublished(client, topic);
+            assertEquals(List.of("a", "b"), readAll(consumer));
+        }
+    }
+
+    /**
      * Two consumers read the same messages independently.
      *
      * @throws Exception on failure

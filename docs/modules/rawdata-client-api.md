@@ -223,7 +223,7 @@ you take only as much as you can handle. There is no reactive-streams or `Flow` 
 |---|---|
 | `receive(timeout, unit)` | the next message, waiting up to the timeout for one to be published; null if none came |
 | `receiveUpTo(max, timeout)` | waits up to the timeout for the first message, then takes what is available at once, up to `max` |
-| `receiveAsync()` | a future of the next message, completed on the client's threads |
+| `receiveAsync()` | a future of the next message, completed on the client's threads; cancelled or timed out, it takes no message |
 | `seek(timestamp)` | moves the position so the next message is the first whose id time is at or after the timestamp |
 
 A consumer is for one thread at a time, and at most one `receiveAsync` may be outstanding. Make one consumer per

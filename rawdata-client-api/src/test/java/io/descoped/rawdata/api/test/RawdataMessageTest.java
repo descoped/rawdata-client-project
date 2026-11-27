@@ -63,6 +63,7 @@ class RawdataMessageTest {
         assertNotEquals(a, RawdataMessage.builder().id(id).orderingGroup("g").position("p").put("k", new byte[]{1, 2}).build());
         assertNotEquals(a, RawdataMessage.builder().position("p").put("k", new byte[]{1, 2}).build());
     }
+
     /**
      * Messages with the same content keys in another order are equal and have the same hash code.
      */
@@ -74,7 +75,6 @@ class RawdataMessageTest {
         assertEquals(ab, ba);
         assertEquals(ab.hashCode(), ba.hashCode());
     }
-
 
     @Test
     void messageWithoutIdAndGroupCanBeCompared() {

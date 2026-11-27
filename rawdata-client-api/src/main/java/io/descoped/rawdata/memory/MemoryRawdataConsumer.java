@@ -84,6 +84,7 @@ final class MemoryRawdataConsumer implements RawdataConsumer {
         CompletableFuture<RawdataMessage> result = new CompletableFuture<>();
         result.whenComplete((message, failure) -> topic.wakeUp()); // a cancelled or timed-out receive stops waiting
         pending.set(result); // failed by close, also before its task runs
+        result.whenComplete((message, failure) -> pending.compareAndSet(result, null)); // holds no message once done
         if (isClosed()) {
             result.completeExceptionally(closedException()); // closed meanwhile
             return result;

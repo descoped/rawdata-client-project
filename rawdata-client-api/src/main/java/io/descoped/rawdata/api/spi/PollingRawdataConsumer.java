@@ -167,6 +167,7 @@ public abstract class PollingRawdataConsumer implements RawdataConsumer {
         CompletableFuture<RawdataMessage> result = new CompletableFuture<>();
         result.whenComplete((message, failure) -> wake()); // a cancelled or timed-out receive stops waiting
         pending.set(result); // failed by close, also before its task runs
+        result.whenComplete((message, failure) -> pending.compareAndSet(result, null)); // holds no message once done
         if (isClosed()) {
             result.completeExceptionally(closedException()); // closed meanwhile
             return result;
@@ -183,9 +184,12 @@ public abstract class PollingRawdataConsumer implements RawdataConsumer {
         try {
             turn.lockInterruptibly();
             try {
-                while (!result.isDone()) {
+                for (; ; ) {
+                    long wakeUpsBefore = wakeUps.get(); // before the check: a cancel after it wakes the wait
+                    if (result.isDone()) {
+                        return;
+                    }
                     checkOpen();
-                    long wakeUpsBefore = wakeUps.get();
                     RawdataMessage message = next();
                     if (message != null) {
                         if (!result.complete(message)) {

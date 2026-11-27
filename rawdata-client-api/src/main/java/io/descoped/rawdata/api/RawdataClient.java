@@ -117,6 +117,7 @@ public interface RawdataClient extends AutoCloseable {
      * @param tolerance       the search range: {@code [approxTimestamp - tolerance, approxTimestamp + tolerance]}
      * @return a consumer on the topic
      * @throws RawdataNoSuchPositionException if the position is not found in the range
+     * @throws IllegalArgumentException       if the tolerance is negative
      */
     default RawdataConsumer consumer(String topic, String initialPosition, long approxTimestamp, Duration tolerance) {
         return consumer(topic, initialPosition == null ? null : cursorOf(topic, initialPosition, false, approxTimestamp, tolerance));
@@ -132,6 +133,7 @@ public interface RawdataClient extends AutoCloseable {
      * @param tolerance       the search range: {@code [approxTimestamp - tolerance, approxTimestamp + tolerance]}
      * @return a consumer on the topic
      * @throws RawdataNoSuchPositionException if the position is not found in the range
+     * @throws IllegalArgumentException       if the tolerance is negative
      */
     default RawdataConsumer consumer(String topic, String initialPosition, boolean inclusive, long approxTimestamp, Duration tolerance) {
         return consumer(topic, initialPosition == null ? null : cursorOf(topic, initialPosition, inclusive, approxTimestamp, tolerance));

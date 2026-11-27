@@ -850,8 +850,9 @@ public abstract class RawdataClientContractTest {
         assertNotNull(client.cursorOf(topic, "a", true, Long.MAX_VALUE, longest));
         assertThrows(RawdataNoSuchPositionException.class, // from the earliest time, it reaches only to 1970
                 () -> client.cursorOf(topic, "a", true, Long.MIN_VALUE, longest));
-        assertThrows(IllegalArgumentException.class,
-                () -> client.cursorOf(topic, "a", true, System.currentTimeMillis(), Duration.ofMillis(-1)));
+        long now = System.currentTimeMillis();
+        Duration negative = Duration.ofMillis(-1);
+        assertThrows(IllegalArgumentException.class, () -> client.cursorOf(topic, "a", true, now, negative));
     }
 
     /**

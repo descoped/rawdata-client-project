@@ -10,6 +10,7 @@ import io.descoped.rawdata.api.RawdataMetadataClient;
 import io.descoped.rawdata.api.RawdataNoSuchPositionException;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataTopics;
+import io.descoped.rawdata.api.spi.IdRange;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -94,6 +95,8 @@ final class DiscardingRawdataClient implements RawdataClient {
     @Override
     public RawdataCursor cursorOf(String topic, String position, boolean inclusive, long approxTimestamp, Duration tolerance) {
         checked(topic);
+        Objects.requireNonNull(position, "position");
+        IdRange.around(approxTimestamp, tolerance); // refuses a negative tolerance, as every provider
         throw new RawdataNoSuchPositionException("Position not found in topic " + topic + " (the discard provider keeps nothing): " + position);
     }
 

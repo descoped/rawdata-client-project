@@ -8,9 +8,9 @@ import io.descoped.rawdata.api.RawdataIds;
 import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.RawdataMetadataClient;
 import io.descoped.rawdata.api.RawdataNoSuchPositionException;
-import io.descoped.rawdata.api.spi.IdRange;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataTopics;
+import io.descoped.rawdata.api.spi.IdRange;
 
 import java.time.Duration;
 import java.util.Map;
@@ -68,9 +68,7 @@ final class MemoryRawdataClient implements RawdataClient {
         Objects.requireNonNull(position, "position");
         MemoryRawdataTopic memoryTopic = topic(topic);
         IdRange range = IdRange.around(approxTimestamp, tolerance);
-        UUID lowerBound = range.from();
-        UUID upperBound = range.to();
-        UUID id = memoryTopic.idOf(position, lowerBound, upperBound);
+        UUID id = memoryTopic.idOf(position, range.from(), range.to());
         if (id == null) {
             throw new RawdataNoSuchPositionException("Position not found in topic " + topic + ": " + position);
         }

@@ -120,7 +120,7 @@ not be unique and need not sort.
 You can start reading at a position, but only with a time window:
 `cursorOf(topic, position, inclusive, approxTimestamp, tolerance)` searches the messages written in
 `[approxTimestamp - tolerance, approxTimestamp + tolerance]` and throws `RawdataNoSuchPositionException` if no message
-with that position is there.
+with that position is there; a negative tolerance is refused.
 
 **Why.** The id belongs to the store; the position belongs to you. It lets you find "the message for invoice 1001"
 without keeping the id. Because a position need not be unique, and because file and object stores cannot index it,

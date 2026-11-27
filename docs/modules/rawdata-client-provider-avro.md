@@ -242,7 +242,11 @@ store at once and is visible when it returns.
 2. **End of block.** The call ends its block: the block is written to the file before `publish` returns, which the
    operating system keeps if the process crashes. Once `avro-file.sync.interval` bytes are written since the last
    force, the file is forced to disk, so a crash of the machine loses the calls written since: about that much, more after a larger call. Never through the file's
-   NIO channel, which an interrupted publisher would close.
+   NIO channel, which an interrupted publisher would close. The client's store calls from an application's thread
+   and its waits there (for uploads in `flush` and `close`, for room among the pending uploads in `publish`) clear a
+   pending interrupt flag for the call and set it again after (`AvroCallerStore`): a file channel, the GCS HTTP
+   client and the AWS SDK would fail at once on such a thread. The client's own upload and timer threads keep it,
+   so closing the client stops them.
 3. **Window closes.** The window is closed (sealed) when, after a call, it is at least `avro-file.max.bytes`; when a
    timer finds it `avro-file.max.seconds` old (so a producer that goes quiet still uploads; a publish to a window
    that old also seals it first); when a producer of the topic closes; or on `flush` and client close. An empty
@@ -494,7 +498,7 @@ The module has three test classes of its own, in the engine's package on the cla
 
 | Test | Covers |
 |---|---|
-| [`AvroTopicWriterTest`](../../rawdata-client-provider-avro/src/test/java/io/descoped/rawdata/provider/avro/AvroTopicWriterTest.java) | the window's failure paths, with an in-memory store whose uploads can be held back, failed or refused: a failed upload keeps every window sealed, a taken segment sets every window aside, back-pressure, the close timeout and recovery by the next writer, leftovers without messages |
+| [`AvroTopicWriterTest`](../../rawdata-client-provider-avro/src/test/java/io/descoped/rawdata/provider/avro/AvroTopicWriterTest.java) | the window's failure paths, with an in-memory store whose uploads can be held back, failed or refused: a failed upload keeps every window sealed, a taken segment sets every window aside, back-pressure, the close timeout and recovery by the next writer, leftovers without messages, interrupted publishers and an interrupted writer start |
 | [`AvroRangedReadTest`](../../rawdata-client-provider-avro/src/test/java/io/descoped/rawdata/provider/avro/AvroRangedReadTest.java) | the header summary, `lastMessage` reading only the last block, a seek reading only headers, a consumer going on after a failed read, malformed ranges |
 | [`AvroUploadLimiterTest`](../../rawdata-client-provider-avro/src/test/java/io/descoped/rawdata/provider/avro/AvroUploadLimiterTest.java) | AIMD: start at 4, one more per round at the limit up to the cap, halving at most once a second, never below 1 |
 
@@ -553,6 +557,7 @@ Internal classes, for contributors:
 |---|---|
 | [`AvroTopicWriter`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroTopicWriter.java) | the upload window of one topic: append, seal, upload queue, failures, recovery |
 | [`AvroUploadLimiter`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroUploadLimiter.java) | the AIMD limit on a client's concurrent uploads |
+| [`AvroCallerStore`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroCallerStore.java) | the store as the client calls it: a pending interrupt of an application's thread fails neither a store call nor a wait for uploads; the client's own threads keep their flag |
 | [`AvroSegments`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroSegments.java) | the schema, the header and its summary, encoding, decoding the last block, reading leftovers |
 | [`AvroSegmentReader`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroSegmentReader.java) | ranged reads: the summary, the last message, the message stream |
 | [`AvroRawdataProducer`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroRawdataProducer.java) | an `OrderedRawdataProducer` that appends to the topic's window |

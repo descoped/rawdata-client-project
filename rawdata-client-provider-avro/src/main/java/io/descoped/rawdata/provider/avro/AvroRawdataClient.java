@@ -59,16 +59,10 @@ public final class AvroRawdataClient implements RawdataClient {
     private final Map<String, Tail> tails = new ConcurrentHashMap<>(); // the last segment seen of each topic
     private final Map<String, AvroTopicWriter> writers = new ConcurrentHashMap<>();
     private final Map<String, ReentrantLock> publishLocks = new ConcurrentHashMap<>();
-    private final ExecutorService executor = Executors.newCachedThreadPool(runnable -> {
-        Thread thread = new Thread(runnable, "rawdata-avro-" + THREADS.incrementAndGet());
-        thread.setDaemon(true);
-        return thread;
-    });
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "rawdata-avro-window-" + THREADS.incrementAndGet());
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final ExecutorService executor = Executors.newCachedThreadPool(
+            runnable -> AvroCallerStore.thread(runnable, "rawdata-avro-" + THREADS.incrementAndGet()));
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
+            runnable -> AvroCallerStore.thread(runnable, "rawdata-avro-window-" + THREADS.incrementAndGet()));
 
     /**
      * The last segment of a topic and the id of its last message; segment -1 for an empty topic.
@@ -85,7 +79,7 @@ public final class AvroRawdataClient implements RawdataClient {
      * @param pollIntervalMillis how often a waiting consumer looks for a new segment, 1 or more
      */
     public AvroRawdataClient(AvroStore store, AvroUploadWindow window, long pollIntervalMillis) {
-        this.store = Objects.requireNonNull(store, "store");
+        this.store = new AvroCallerStore(Objects.requireNonNull(store, "store"));
         this.window = Objects.requireNonNull(window, "window");
         if (pollIntervalMillis < 1) {
             throw new IllegalArgumentException("The poll interval must be 1 ms or more: " + pollIntervalMillis);

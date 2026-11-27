@@ -1137,6 +1137,45 @@ public abstract class RawdataClientContractTest {
         }
     }
 
+    // ---- an interrupted thread
+
+    /**
+     * A thread whose interrupt flag is set (an application stopping a worker) calls the client like any other thread:
+     * a restarted writer starts on the topic, publishes, closes its producer, waits for what it published and closes
+     * the client; lastMessage, a consumer's seek and metadata read the store. The flag is kept for the application to
+     * see.
+     *
+     * @throws InterruptedException if interrupted while waiting
+     */
+    @Test
+    public void anInterruptedThreadReadsAndWritesAndKeepsTheFlag() throws InterruptedException {
+        assumeTrue(clientsShareTheStore(), "the provider keeps a store per client");
+        publish("a");
+        client.metadata(topic).put("k", new byte[]{1});
+        awaitPublished(client, topic);
+        RawdataClient restarted = RawdataClient.create(configuration());
+        Thread.currentThread().interrupt();
+        try {
+            assertEquals("a", restarted.lastMessage(topic).position());
+            assertArrayEquals(new byte[]{1}, restarted.metadata(topic).get("k"));
+            restarted.metadata(topic).put("k", new byte[]{2});
+            try (RawdataProducer producer = restarted.producer(topic)) {
+                producer.publish(message("b"));
+            }
+            restarted.consumer(topic, "a", System.currentTimeMillis(), Duration.ofMinutes(1)).close();
+            awaitPublished(restarted, topic);
+            restarted.close();
+            assertTrue(Thread.currentThread().isInterrupted(), "the flag is kept");
+        } finally {
+            Thread.interrupted();
+            restarted.close();
+        }
+        try (RawdataConsumer consumer = client.consumer(topic)) {
+            assertEquals(List.of("a", "b"), readAll(consumer));
+        }
+        assertArrayEquals(new byte[]{2}, client.metadata(topic).get("k"));
+    }
+
     // ---- a store that does not exist
 
     /**

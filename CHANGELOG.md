@@ -7,8 +7,8 @@
   - **A `publish` that returned survives a crash of the process.** postgres already committed each call. `filesystem`,
     `gcs` and `s3` now end every publish call's Avro block and write it to the buffer file before `publish` returns;
     before, a crash lost the calls in Avro's in-memory block (up to `avro-file.sync.interval`, 512 KiB). The file is
-    forced to disk every `avro-file.sync.interval` bytes, as before, so a crash of the machine loses at most that
-    much. `local-temp-folder` must outlive the process. `memory` keeps nothing past its process, as before.
+    forced to disk every `avro-file.sync.interval` bytes, as before, so a crash of the machine loses the calls written
+    since: about that much, more after a larger call. `local-temp-folder` must outlive the process. `memory` keeps nothing past its process, as before.
   - **Once a client has a producer of a topic, `lastMessage` holds everything the topic will hold**, crash or not.
     `filesystem`, `gcs` and `s3` now start the topic's writer in `producer(topic)`: it takes the buffer folder's lock
     and uploads what a crash left before `producer` returns. Before, that happened at the first publish, so a writer

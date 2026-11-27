@@ -23,9 +23,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * Publish calls per second with one message per call: one thread, several threads on one producer, and one thread
  * with {@code publishAsync} calls in flight. Not a test: run it on the disk to measure with
- * {@code -Drawdata.bench=true -Dtest=FilesystemPublishBenchmark}; it prints its results.
+ * {@code -Drawdata.bench=true -Dtest=FilesystemPublishBenchmarkTest}; it prints its results.
  */
-class FilesystemPublishBenchmark {
+class FilesystemPublishBenchmarkTest {
 
     private static final int SECONDS = 5;
 

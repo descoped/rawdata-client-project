@@ -241,7 +241,7 @@ store at once and is visible when it returns.
    whole call to the open window, opening one if there is none. A call always goes into one window whole, never split across two.
 2. **End of block.** The call ends its block: the block is written to the file before `publish` returns, which the
    operating system keeps if the process crashes. Once `avro-file.sync.interval` bytes are written since the last
-   force, the file is forced to disk, so a crash of the machine loses at most that much. Never through the file's
+   force, the file is forced to disk, so a crash of the machine loses the calls written since: about that much, more after a larger call. Never through the file's
    NIO channel, which an interrupted publisher would close.
 3. **Window closes.** The window is closed (sealed) when, after a call, it is at least `avro-file.max.bytes`; when a
    timer finds it `avro-file.max.seconds` old (so a producer that goes quiet still uploads; a publish to a window

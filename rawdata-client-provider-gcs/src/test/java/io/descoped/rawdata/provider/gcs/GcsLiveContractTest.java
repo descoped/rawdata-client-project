@@ -4,7 +4,6 @@ import io.descoped.rawdata.tck.avro.AvroClientContractTest;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.OptionalInt;
@@ -42,7 +41,7 @@ class GcsLiveContractTest extends AvroClientContractTest {
     }
 
     @AfterAll
-    static void removeTheTestObjects() throws IOException, InterruptedException {
+    static void removeTheTestObjects() {
         LiveGcs.remove(PREFIX);
     }
 }

@@ -18,8 +18,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Token refresh against Google with the credentials file of the live tests ({@link LiveGcs}), a gcloud user's or a
@@ -62,7 +64,8 @@ class GcsLiveCredentialsTest {
     }
 
     /**
-     * A token past its time is fetched again from Google, and the new one works.
+     * A token past its time is fetched again from Google, and the new one works. Only for a gcloud user: a service
+     * account signs its token request with the same clock, and Google refuses a request from two hours ahead.
      *
      * @throws IOException if GCS fails
      */
@@ -70,13 +73,14 @@ class GcsLiveCredentialsTest {
     void anExpiredTokenIsFetchedAgain() throws IOException {
         MovableClock clock = new MovableClock();
         GcsCredentials credentials = credentialsFile(clock);
+        assumeFalse(credentials instanceof GcsCredentials.ServiceAccount, "a service account's request carries the moved clock");
         GcsClient gcs = new GcsClient(http, GcsClient.DEFAULT_ENDPOINT, credentials);
         String object = LiveGcs.RUN + PREFIX + "expired";
         assertTrue(gcs.upload(LiveGcs.bucket(), object, "application/octet-stream", CONTENT, 0, false));
         String first = credentials.authorization().orElseThrow();
         clock.advance(Duration.ofHours(2));
         String second = credentials.authorization().orElseThrow();
-        assertFalse(first.equals(second), "a new token after the old one's time"); // never shows the tokens
+        assertNotEquals(first.hashCode(), second.hashCode(), "a new token after the old one's time"); // never shows a token
         assertArrayEquals(CONTENT, gcs.download(LiveGcs.bucket(), object).orElseThrow());
     }
 
@@ -114,14 +118,12 @@ class GcsLiveCredentialsTest {
      */
     private GcsCredentials credentialsFile(Clock clock) throws IOException {
         String file = System.getProperty("rawdata.gcs.live.key-file", System.getenv("GOOGLE_APPLICATION_CREDENTIALS"));
-        if (file == null) {
-            throw new IllegalStateException("The credentials tests need -Drawdata.gcs.live.key-file or GOOGLE_APPLICATION_CREDENTIALS");
-        }
+        assumeTrue(file != null, "the credentials tests need -Drawdata.gcs.live.key-file or GOOGLE_APPLICATION_CREDENTIALS");
         return GcsCredentials.fromFile(Path.of(file), http, clock);
     }
 
     @AfterAll
-    static void removeTheTestObjects() throws IOException, InterruptedException {
+    static void removeTheTestObjects() {
         LiveGcs.remove(PREFIX);
     }
 }

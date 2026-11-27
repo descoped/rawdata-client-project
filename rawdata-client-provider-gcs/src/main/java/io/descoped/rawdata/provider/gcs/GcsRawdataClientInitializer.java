@@ -87,11 +87,11 @@ public final class GcsRawdataClientInitializer implements RawdataClientInitializ
         AvroUploadWindow window = AvroUploadWindow.of(configuration);
         String endpoint = AvroConfiguration.optional(configuration, ENDPOINT, GcsClient.DEFAULT_ENDPOINT);
         HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-        GcsClient client = new GcsClient(http, endpoint, credentials(configuration, http));
+        GcsClient client = new GcsClient(http, endpoint, loadCredentials(configuration, http));
         return new AvroRawdataClient(new GcsAvroStore(client, bucket, prefix), window, pollInterval);
     }
 
-    static GcsCredentials credentials(Map<String, String> configuration, HttpClient http) {
+    static GcsCredentials loadCredentials(Map<String, String> configuration, HttpClient http) {
         CredentialProvider kind = AvroConfiguration.enumValue(configuration, CREDENTIALS, CredentialProvider.class,
                 CredentialProvider.SERVICE_ACCOUNT);
         try {

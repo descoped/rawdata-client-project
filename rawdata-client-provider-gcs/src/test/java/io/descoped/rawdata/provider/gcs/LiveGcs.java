@@ -40,18 +40,23 @@ final class LiveGcs {
     }
 
     static Map<String, String> configuration(String prefix) {
-        Map<String, String> configuration = new HashMap<>();
+        Map<String, String> configuration = credentialsConfiguration();
         configuration.put(RawdataClient.PROVIDER_KEY, "gcs");
         configuration.put("gcs.bucket-name", bucket());
         configuration.put("gcs.prefix", RUN + prefix);
+        configuration.put("gcs.listing.min-interval-seconds", "0");
+        configuration.put("local-temp-folder", bufferFolder());
+        configuration.put("avro-file.max.seconds", "1");
+        return configuration;
+    }
+
+    private static Map<String, String> credentialsConfiguration() {
+        Map<String, String> configuration = new HashMap<>();
         configuration.put("gcs.credential-provider", System.getProperty("rawdata.gcs.live.credential-provider", "application-default"));
         String keyFile = System.getProperty("rawdata.gcs.live.key-file");
         if (keyFile != null) {
             configuration.put("gcs.service-account.key-file", keyFile);
         }
-        configuration.put("gcs.listing.min-interval-seconds", "0");
-        configuration.put("local-temp-folder", bufferFolder());
-        configuration.put("avro-file.max.seconds", "1");
         return configuration;
     }
 
@@ -64,11 +69,22 @@ final class LiveGcs {
     }
 
     /**
-     * Removes everything under a prefix of this run, in every sub-folder.
+     * Removes everything under a prefix of this run, in every sub-folder. A failure is reported, not thrown: what is
+     * left is removed by the bucket's lifecycle rule.
      */
-    static void remove(String prefix) throws IOException, InterruptedException {
+    static void remove(String prefix) {
+        try {
+            removeOrFail(prefix);
+        } catch (IOException | RuntimeException e) {
+            System.err.println("Removing gs://" + bucket() + "/" + RUN + prefix + " failed, left to the bucket's lifecycle: " + e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void removeOrFail(String prefix) throws IOException, InterruptedException {
         HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-        GcsCredentials credentials = GcsRawdataClientInitializer.credentials(configuration(prefix), http);
+        GcsCredentials credentials = GcsRawdataClientInitializer.loadCredentials(credentialsConfiguration(), http);
         GcsClient gcs = new GcsClient(http, GcsClient.DEFAULT_ENDPOINT, credentials);
         String bucket = bucket();
         String pageToken = null;

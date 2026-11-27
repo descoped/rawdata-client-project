@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -80,17 +81,21 @@ class RawdataCopyTest {
     void waitsForMessagesUntilTheIdleTimeout() throws Exception {
         try (RawdataClient source = memory(); RawdataClient target = memory()) {
             fill(source, "t", 3);
-            CompletableFuture.runAsync(() -> {
+            CountDownLatch waiting = new CountDownLatch(1);
+            CompletableFuture<Void> late = CompletableFuture.runAsync(() -> {
                 try {
-                    Thread.sleep(200);
+                    if (waiting.await(30, TimeUnit.SECONDS)) {
+                        fill(source, "t", 2); // once the copy waits for more
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
-                fill(source, "t", 2);
             });
-            try (RawdataConsumer from = source.consumer("t"); RawdataProducer to = target.producer("t")) {
-                assertEquals(5, RawdataCopy.copy(from, to, 100, Duration.ofSeconds(1)));
+            try (RawdataConsumer from = new WaitSignallingConsumer(source.consumer("t"), waiting);
+                 RawdataProducer to = target.producer("t")) {
+                assertEquals(5, RawdataCopy.copy(from, to, 100, Duration.ofSeconds(5)));
             }
+            late.get(30, TimeUnit.SECONDS);
         }
     }
 
@@ -172,6 +177,55 @@ class RawdataCopyTest {
         @Override
         public void close() {
             delegate.close();
+        }
+    }
+
+    /**
+     * A consumer that counts a latch down when it is asked to wait for a message the second time: the copy has taken
+     * the first batch and waits for more.
+     */
+    private static final class WaitSignallingConsumer implements RawdataConsumer {
+
+        private final RawdataConsumer consumer;
+        private final CountDownLatch waiting;
+        private final AtomicInteger waits = new AtomicInteger();
+
+        WaitSignallingConsumer(RawdataConsumer consumer, CountDownLatch waiting) {
+            this.consumer = consumer;
+            this.waiting = waiting;
+        }
+
+        @Override
+        public String topic() {
+            return consumer.topic();
+        }
+
+        @Override
+        public RawdataMessage receive(int timeout, TimeUnit unit) throws InterruptedException {
+            if (timeout > 0 && waits.incrementAndGet() == 2) {
+                waiting.countDown();
+            }
+            return consumer.receive(timeout, unit);
+        }
+
+        @Override
+        public CompletableFuture<? extends RawdataMessage> receiveAsync() {
+            return consumer.receiveAsync();
+        }
+
+        @Override
+        public void seek(long timestamp) {
+            consumer.seek(timestamp);
+        }
+
+        @Override
+        public boolean isClosed() {
+            return consumer.isClosed();
+        }
+
+        @Override
+        public void close() {
+            consumer.close();
         }
     }
 }

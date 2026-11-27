@@ -50,6 +50,8 @@ class DiscardProviderTest {
         assertNull(client.lastMessage("the-topic"));
         assertNotNull(client.cursorOf("the-topic", RawdataIds.generate(), true));
         assertThrows(RawdataNoSuchPositionException.class, () -> client.cursorOf("the-topic", "p1", true, 0, Duration.ZERO));
+        Duration negative = Duration.ofMillis(-1);
+        assertThrows(IllegalArgumentException.class, () -> client.cursorOf("the-topic", "p1", true, 0, negative));
         try (RawdataConsumer consumer = client.consumer("the-topic")) {
             assertNull(consumer.receive(50, TimeUnit.MILLISECONDS));
             consumer.seek(123);

@@ -51,7 +51,10 @@ public interface RawdataProducer extends AutoCloseable {
     void publish(RawdataMessage... messages) throws RawdataClosedException;
 
     /**
-     * Publishes messages asynchronously, as {@link #publish(RawdataMessage...)}.
+     * Publishes messages asynchronously, as {@link #publish(RawdataMessage...)}. Each call runs on a thread of the
+     * client until it completes. Asynchronous publishes are not ordered against each other, even from one thread: the
+     * second may be written first. When order matters, publish the next after the future completes, or use
+     * {@code publish}.
      *
      * @param messages the messages
      * @return a future that completes when the messages are written, or exceptionally when the write fails
@@ -61,7 +64,10 @@ public interface RawdataProducer extends AutoCloseable {
     }
 
     /**
-     * Publishes messages asynchronously, as {@link #publish(RawdataMessage...)}.
+     * Publishes messages asynchronously, as {@link #publish(RawdataMessage...)}. Each call runs on a thread of the
+     * client until it completes. Asynchronous publishes are not ordered against each other, even from one thread: the
+     * second may be written first. When order matters, publish the next after the future completes, or use
+     * {@code publish}.
      *
      * @param messages the messages
      * @return a future that completes when the messages are written, or exceptionally when the write fails

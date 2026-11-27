@@ -105,7 +105,7 @@ Starting points:
 |---|---|
 | `client.consumer(topic)` | the beginning |
 | `client.consumer(topic, id)` | after the message with that id; `consumer(topic, id, true)` at it |
-| `client.consumer(topic, position, approxTimestamp, tolerance)` | after the first message with that position written within `approxTimestamp ± tolerance` (both ends included); `RawdataNoSuchPositionException` if there is none |
+| `client.consumer(topic, position, approxTimestamp, tolerance)` | after the first message with that position written within `approxTimestamp ± tolerance` (both ends included); `RawdataNoSuchPositionException` if there is none, `IllegalArgumentException` for a negative tolerance |
 
 `client.lastMessage(topic)` returns the newest message, or null for an empty topic.
 

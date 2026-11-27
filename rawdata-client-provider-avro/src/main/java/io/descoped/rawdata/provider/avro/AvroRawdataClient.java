@@ -12,6 +12,7 @@ import io.descoped.rawdata.api.RawdataNoSuchPositionException;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataTopics;
 import io.descoped.rawdata.api.RawdataWriterConflictException;
+import io.descoped.rawdata.api.spi.IdRange;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -135,19 +136,17 @@ public final class AvroRawdataClient implements RawdataClient {
     public RawdataCursor cursorOf(String topic, String position, boolean inclusive, long approxTimestamp, Duration tolerance) {
         String name = checked(topic);
         Objects.requireNonNull(position, "position");
-        Objects.requireNonNull(tolerance, "tolerance");
-        UUID lowerBound = RawdataIds.beginningOf(approxTimestamp - tolerance.toMillis());
-        UUID upperBound = RawdataIds.beginningOf(approxTimestamp + tolerance.toMillis() + 1);
-        for (long segment = firstSegmentReaching(name, lowerBound); ; segment++) {
+        IdRange range = IdRange.around(approxTimestamp, tolerance);
+        for (long segment = firstSegmentReaching(name, range.from()); ; segment++) {
             AvroSegmentReader reader = reader(name, segment);
             if (reader == null) {
                 break;
             }
             for (RawdataMessage message = next(reader, name, segment); message != null; message = next(reader, name, segment)) {
-                if (RawdataIds.ORDER.compare(message.id(), upperBound) >= 0) {
+                if (RawdataIds.ORDER.compare(message.id(), range.to()) >= 0) {
                     throw new RawdataNoSuchPositionException("Position not found in topic " + name + ": " + position);
                 }
-                if (RawdataIds.ORDER.compare(message.id(), lowerBound) >= 0 && position.equals(message.position())) {
+                if (RawdataIds.ORDER.compare(message.id(), range.from()) >= 0 && position.equals(message.position())) {
                     return new AvroCursor(message.id(), inclusive);
                 }
             }

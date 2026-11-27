@@ -117,6 +117,7 @@ public interface RawdataClient extends AutoCloseable {
      * @param tolerance       the search range: {@code [approxTimestamp - tolerance, approxTimestamp + tolerance]}
      * @return a consumer on the topic
      * @throws RawdataNoSuchPositionException if the position is not found in the range
+     * @throws IllegalArgumentException       if the tolerance is negative
      */
     default RawdataConsumer consumer(String topic, String initialPosition, long approxTimestamp, Duration tolerance) {
         return consumer(topic, initialPosition == null ? null : cursorOf(topic, initialPosition, false, approxTimestamp, tolerance));
@@ -132,6 +133,7 @@ public interface RawdataClient extends AutoCloseable {
      * @param tolerance       the search range: {@code [approxTimestamp - tolerance, approxTimestamp + tolerance]}
      * @return a consumer on the topic
      * @throws RawdataNoSuchPositionException if the position is not found in the range
+     * @throws IllegalArgumentException       if the tolerance is negative
      */
     default RawdataConsumer consumer(String topic, String initialPosition, boolean inclusive, long approxTimestamp, Duration tolerance) {
         return consumer(topic, initialPosition == null ? null : cursorOf(topic, initialPosition, inclusive, approxTimestamp, tolerance));
@@ -157,9 +159,10 @@ public interface RawdataClient extends AutoCloseable {
      * @param position        the position
      * @param inclusive       whether that message is read first
      * @param approxTimestamp when the message was written, approximately, in milliseconds since 1970-01-01T00:00Z
-     * @param tolerance       how far from the timestamp to search
+     * @param tolerance       how far from the timestamp to search, zero or more
      * @return the cursor, never null
      * @throws RawdataNoSuchPositionException if no message with the position is found in the range
+     * @throws IllegalArgumentException       if the tolerance is negative
      */
     RawdataCursor cursorOf(String topic, String position, boolean inclusive, long approxTimestamp, Duration tolerance) throws RawdataNoSuchPositionException;
 

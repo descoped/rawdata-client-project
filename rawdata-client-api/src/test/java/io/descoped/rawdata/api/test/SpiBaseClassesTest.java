@@ -325,7 +325,29 @@ class SpiBaseClassesTest {
                 throw new IllegalStateException("pool closed");
             }
         };
-        assertThrows(RawdataClosedException.class, () -> closedDuringRead.receive(0, TimeUnit.SECONDS));
+        RawdataClosedException closed = assertThrows(RawdataClosedException.class, () -> closedDuringRead.receive(0, TimeUnit.SECONDS));
+        assertEquals("pool closed", closed.getCause().getMessage(), "the read's failure is kept as the cause");
+    }
+
+    /**
+     * A read that puts messages in the buffer and then fails reports the failure, and the messages it put there are
+     * delivered after it, as the Avro consumer needs.
+     */
+    @Test
+    void aReadThatFailsHalfwayKeepsWhatItBuffered() throws Exception {
+        RawdataMessage a = message("a");
+        IllegalStateException halfway = new IllegalStateException("store failed halfway");
+        QueueConsumer consumer = new QueueConsumer(10) {
+            @Override
+            protected void fill(Deque<RawdataMessage> buffer) {
+                if (fills.getAndIncrement() == 0) {
+                    buffer.addLast(a);
+                    throw halfway;
+                }
+            }
+        };
+        assertSame(halfway, assertThrows(IllegalStateException.class, () -> consumer.receive(0, TimeUnit.SECONDS)));
+        assertSame(a, consumer.receive(0, TimeUnit.SECONDS));
     }
 
     @Test

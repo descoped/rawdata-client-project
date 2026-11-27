@@ -11,6 +11,7 @@ import io.descoped.rawdata.api.RawdataMetadataClient;
 import io.descoped.rawdata.api.RawdataNoSuchPositionException;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataTopics;
+import io.descoped.rawdata.api.spi.IdRange;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -82,16 +83,14 @@ final class PostgresRawdataClient implements RawdataClient {
     public RawdataCursor cursorOf(String topic, String position, boolean inclusive, long approxTimestamp, Duration tolerance) {
         String name = checked(topic);
         Objects.requireNonNull(position, "position");
-        Objects.requireNonNull(tolerance, "tolerance");
-        UUID lowerBound = RawdataIds.beginningOf(approxTimestamp - tolerance.toMillis());
-        UUID upperBound = RawdataIds.beginningOf(approxTimestamp + tolerance.toMillis() + 1);
+        IdRange range = IdRange.around(approxTimestamp, tolerance);
         UUID id = jdbc.transaction(connection -> {
             try (PreparedStatement select = connection.prepareStatement(
                     "SELECT id FROM rawdata_message WHERE topic = ? AND position = ? AND id >= ? AND id < ? ORDER BY id LIMIT 1")) {
                 select.setString(1, name);
                 select.setString(2, position);
-                select.setObject(3, lowerBound);
-                select.setObject(4, upperBound);
+                select.setObject(3, range.from());
+                select.setObject(4, range.to());
                 try (ResultSet rows = select.executeQuery()) {
                     return rows.next() ? rows.getObject(1, UUID.class) : null;
                 }

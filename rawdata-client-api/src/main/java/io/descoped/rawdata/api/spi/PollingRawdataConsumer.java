@@ -7,7 +7,6 @@ import io.descoped.rawdata.api.RawdataMessage;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -151,26 +150,56 @@ public abstract class PollingRawdataConsumer implements RawdataConsumer {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The future is completed while this consumer's turn is held, so a message taken for a future that was cancelled
+     * or timed out meanwhile goes back to the head of the buffer, and the next receive gets it. A dependent that is
+     * not async runs then too, before the next receive of this consumer: give long work to an async dependent. A
+     * cancelled or timed-out receive stops waiting at once and frees its thread.
+     */
     @Override
     public final CompletableFuture<RawdataMessage> receiveAsync() {
         checkOpen();
+        CompletableFuture<RawdataMessage> result = new CompletableFuture<>();
+        result.whenComplete((message, failure) -> wake()); // a cancelled or timed-out receive stops waiting
         try {
-            return CompletableFuture.supplyAsync(() -> {
-                try {
-                    for (; ; ) {
-                        RawdataMessage message = receive(1, TimeUnit.SECONDS);
-                        if (message != null) {
-                            return message;
-                        }
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    // closing the client interrupts its threads
-                    throw new CompletionException(isClosed() ? closedException() : e);
-                }
-            }, executor());
+            executor().execute(() -> receiveInto(result));
         } catch (RejectedExecutionException e) {
-            return CompletableFuture.failedFuture(closedException());
+            result.completeExceptionally(closedException()); // the client closed meanwhile
+        }
+        return result;
+    }
+
+    private void receiveInto(CompletableFuture<RawdataMessage> result) {
+        try {
+            turn.lockInterruptibly();
+            try {
+                while (!result.isDone()) {
+                    checkOpen();
+                    long wakeUpsBefore = wakeUps.get();
+                    RawdataMessage message = next();
+                    if (message != null) {
+                        if (!result.complete(message)) {
+                            buffer.addFirst(message); // cancelled or timed out meanwhile: kept for the next receive
+                        }
+                        return;
+                    }
+                    turn.unlock();
+                    try {
+                        await(wakeUpsBefore, pollIntervalNanos);
+                    } finally {
+                        turn.lock();
+                    }
+                }
+            } finally {
+                turn.unlock();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt(); // closing the client interrupts its threads
+            result.completeExceptionally(isClosed() ? closedException() : e);
+        } catch (RuntimeException e) {
+            result.completeExceptionally(e);
         }
     }
 

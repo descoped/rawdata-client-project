@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -218,6 +219,65 @@ class SpiBaseClassesTest {
         consumer.duringFill = () -> consumer.failure = failure; // the next read fails
         assertEquals(List.of(a), consumer.receiveUpTo(10, java.time.Duration.ofSeconds(1)));
         assertSame(failure, assertThrows(IllegalStateException.class, () -> consumer.receive(0, TimeUnit.SECONDS)));
+    }
+
+    /**
+     * An asynchronous receive cancelled while it reads keeps the message it read: the next receive gets it.
+     */
+    @Test
+    void aReceiveCancelledWhileItReadsKeepsTheMessage() throws Exception {
+        QueueConsumer consumer = new QueueConsumer(HOUR);
+        RawdataMessage a = message("a");
+        consumer.store.add(a);
+        CountDownLatch reading = new CountDownLatch(1);
+        CountDownLatch cancelled = new CountDownLatch(1);
+        consumer.duringFill = () -> {
+            reading.countDown();
+            await(cancelled);
+        };
+        CompletableFuture<RawdataMessage> received = consumer.receiveAsync();
+        assertTrue(reading.await(10, TimeUnit.SECONDS));
+        assertTrue(received.cancel(false));
+        consumer.duringFill = () -> {
+        };
+        cancelled.countDown();
+        assertSame(a, consumer.receive(10, TimeUnit.SECONDS));
+    }
+
+    /**
+     * A cancelled asynchronous receive stops waiting at once and frees its thread, also with an hour's poll interval:
+     * the next asynchronous receive runs on the same single thread.
+     */
+    @Test
+    void aCancelledReceiveFreesItsThread() throws Exception {
+        QueueConsumer consumer = new QueueConsumer(HOUR);
+        ExecutorService single = Executors.newSingleThreadExecutor();
+        try {
+            consumer.asyncExecutor = single;
+            CountDownLatch waiting = new CountDownLatch(1);
+            consumer.duringFill = waiting::countDown; // the read found nothing: the receive waits next
+            CompletableFuture<RawdataMessage> cancelled = consumer.receiveAsync();
+            assertTrue(waiting.await(10, TimeUnit.SECONDS));
+            assertTrue(cancelled.cancel(false));
+            CompletableFuture<RawdataMessage> next = consumer.receiveAsync();
+            RawdataMessage b = message("b");
+            consumer.store.add(b);
+            consumer.wake();
+            assertSame(b, next.get(10, TimeUnit.SECONDS));
+        } finally {
+            single.shutdownNow();
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("test: not released");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test

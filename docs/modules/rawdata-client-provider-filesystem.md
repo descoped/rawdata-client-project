@@ -354,7 +354,7 @@ is an `IllegalArgumentException` that names its key.
 | `local-temp-folder` | required | where producers buffer, one folder per topic; a local disk |
 | `listing.min-interval-seconds` | `1` | how often a waiting consumer looks for the next segment, in whole seconds; `0` as often as `receive` asks (at least 10 ms apart) |
 | `avro-file.max.seconds` | `60` | the longest a window stays open before it is uploaded |
-| `avro-file.max.bytes` | `67108864` (64 MiB) | the size at which a window closes |
+| `avro-file.max.bytes` | `67108864` (64 MiB) | the size at which a window closes; at most 1 GiB |
 | `avro-file.sync.interval` | `524288` (512 KiB) | the block size Avro's buffer is sized for; every publish call ends its own block, written to the file; the file is forced to disk every this many bytes |
 | `avro-file.max.pending-uploads` | `4` | sealed windows that may wait for upload before `publish` waits |
 | `avro-file.close-timeout-seconds` | `30` | the longest `close()` of a producer or the client waits for the uploads |

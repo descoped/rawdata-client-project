@@ -17,7 +17,8 @@ import java.util.Objects;
  * @param localTempFolder   where windows are buffered: a local disk, one folder per topic ({@value #LOCAL_TEMP_FOLDER},
  *                          required)
  * @param maxSeconds        the longest a window stays open, in seconds ({@value #MAX_SECONDS}, default 60)
- * @param maxBytes          the size at which a window closes ({@value #MAX_BYTES}, default 64 MiB)
+ * @param maxBytes          the size at which a window closes ({@value #MAX_BYTES}, default 64 MiB, at most
+ *                          {@link #MAX_BYTES_LIMIT}: an upload holds the whole window in memory)
  * @param syncInterval      the block size, in bytes, that Avro's buffer is sized for and that a crash's leftover is
  *                          re-encoded in, and how much is written between forcing the file to disk
  *                          ({@value #SYNC_INTERVAL}, default 512 KiB). Every publish call ends its block and writes it
@@ -38,6 +39,11 @@ public record AvroUploadWindow(Path localTempFolder, long maxSeconds, long maxBy
     public static final String MAX_SECONDS = "avro-file.max.seconds";
     /** The size in bytes at which a window closes. */
     public static final String MAX_BYTES = "avro-file.max.bytes";
+    /**
+     * The largest {@value #MAX_BYTES}: 1 GiB. An upload reads the whole window into one array, which cannot hold 2 GiB,
+     * and holds it in memory while it runs.
+     */
+    public static final long MAX_BYTES_LIMIT = 1L << 30;
     /** The size of an Avro block, in bytes. */
     public static final String SYNC_INTERVAL = "avro-file.sync.interval";
     /** How many closed windows may wait for upload. */
@@ -70,6 +76,10 @@ public record AvroUploadWindow(Path localTempFolder, long maxSeconds, long maxBy
         Objects.requireNonNull(localTempFolder, "localTempFolder");
         positive(MAX_SECONDS, maxSeconds);
         positive(MAX_BYTES, maxBytes);
+        if (maxBytes > MAX_BYTES_LIMIT) {
+            throw new IllegalArgumentException("Configuration '" + MAX_BYTES + "' must be at most " + MAX_BYTES_LIMIT
+                    + " (1 GiB): " + maxBytes);
+        }
         positive(SYNC_INTERVAL, syncInterval);
         positive(MAX_PENDING_UPLOADS, maxPendingUploads);
         positive(CLOSE_TIMEOUT_SECONDS, closeTimeoutSeconds);

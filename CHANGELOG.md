@@ -37,6 +37,9 @@
   blocks) as the sealed window before it uploads it. Before, a crash between that upload and the file's removal made
   the next start set the window aside and fail with `RawdataWriterConflictException`, though no other process wrote
   the topic.
+- `filesystem`, `gcs` and `s3` refuse `avro-file.max.bytes` above 1 GiB (`AvroUploadWindow.MAX_BYTES_LIMIT`) with
+  `IllegalArgumentException` when the client is created. An upload reads the whole window into one array; before, a
+  window of 2 GiB or more failed every upload with `OutOfMemoryError`.
 - The POM names the organisation, Descoped (https://descoped.io).
 
 ## 3.1.0

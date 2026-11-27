@@ -1,9 +1,10 @@
 package io.descoped.rawdata.provider.avro;
 
+import io.descoped.rawdata.api.RawdataConsumer;
 import io.descoped.rawdata.api.RawdataDuplicateIdException;
 import io.descoped.rawdata.api.RawdataException;
+import io.descoped.rawdata.api.RawdataIds;
 import io.descoped.rawdata.api.RawdataMessage;
-import io.descoped.rawdata.api.RawdataConsumer;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataWriterConflictException;
 import org.junit.jupiter.api.Test;
@@ -26,6 +27,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -290,12 +292,6 @@ class AvroTopicWriterTest {
     }
 
     /**
-     * Leftovers that hold no message (a header cut short, a file without the window's header) are removed, and the
-     * writer starts at the topic's end.
-     *
-     * @throws Exception if the test fails unexpectedly
-     */
-    /**
      * Group commit: calls of several threads share blocks and disk syncs, and once every call returned, the open window
      * on disk, read as recovery reads it, holds every message once.
      *
@@ -354,7 +350,7 @@ class AvroTopicWriterTest {
                 String prefix = t + "-";
                 List<Integer> order = read.stream().filter(p -> p.startsWith(prefix))
                         .map(p -> Integer.parseInt(p.substring(prefix.length()))).toList();
-                assertEquals(java.util.stream.IntStream.range(0, calls).boxed().toList(), order, "thread " + t + " in order");
+                assertEquals(IntStream.range(0, calls).boxed().toList(), order, "thread " + t + " in order");
             }
         }
     }
@@ -371,7 +367,7 @@ class AvroTopicWriterTest {
         AvroUploadWindow window = new AvroUploadWindow(folder, 3600, 1L << 30, 512 * 1024, 4, 30, 16);
         List<RawdataMessage> messages = new ArrayList<>();
         for (int i = 0; i < 50; i++) {
-            messages.add(RawdataMessage.builder().id(io.descoped.rawdata.api.RawdataIds.generate()).position("m" + i)
+            messages.add(RawdataMessage.builder().id(RawdataIds.generate()).position("m" + i)
                     .put("payload", new byte[]{(byte) i}).build());
         }
         try (AvroRawdataClient client = new AvroRawdataClient(store, window, 10)) {
@@ -456,6 +452,32 @@ class AvroTopicWriterTest {
         }
     }
 
+    /**
+     * An interrupted caller does not force the disk and does not fail the writer: its publish throws with the interrupt
+     * kept, its call stays appended, and the next publish forces both.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void anInterruptedPublishThrowsAndTheWriterGoesOn() throws Exception {
+        GatedStore store = new GatedStore();
+        try (AvroRawdataClient client = new AvroRawdataClient(store,
+                new AvroUploadWindow(folder, 3600, 1L << 30, 512 * 1024, 4, 30, 16), 10)) {
+            RawdataProducer producer = client.producer("t");
+            Thread.currentThread().interrupt();
+            try {
+                RawdataMessage first = message("a", 10);
+                RawdataException interrupted = assertThrows(RawdataException.class, () -> producer.publish(first));
+                assertTrue(interrupted.getMessage().contains("Interrupted"), interrupted.getMessage());
+                assertTrue(Thread.currentThread().isInterrupted(), "the interrupt is kept");
+            } finally {
+                Thread.interrupted();
+            }
+            producer.publish(message("b", 10));
+            assertEquals(List.of("a", "b"), leftoverPositions(), "the interrupted call stayed appended; both are on disk");
+        }
+    }
+
     private List<String> leftoverPositions() throws IOException {
         List<String> windows = files();
         assertEquals(1, windows.size(), "one open window: " + windows);
@@ -489,11 +511,17 @@ class AvroTopicWriterTest {
         }
     }
 
+    /**
+     * Leftovers that hold no message (a header cut short, a file without the window's header) are removed, and the
+     * writer starts at the topic's end.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
     @Test
     void leftoversWithoutMessagesAreRemoved() throws Exception {
         Path topic = Files.createDirectories(folder.resolve("t"));
         Files.write(topic.resolve("0000000000000000000.window.avro"), new byte[]{'O', 'b', 'j'});
-        byte[] noHeader = AvroSegments.encode(List.of(), 1, io.descoped.rawdata.api.RawdataIds.beginningOfTime(), 64);
+        byte[] noHeader = AvroSegments.encode(List.of(), 1, RawdataIds.beginningOfTime(), 64);
         Files.write(topic.resolve("0000000000000000001.sealed.avro"), noHeader);
         GatedStore store = new GatedStore();
         try (AvroRawdataClient client = client(store, 1 << 20, 4)) {

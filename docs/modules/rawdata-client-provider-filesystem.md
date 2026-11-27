@@ -283,7 +283,7 @@ publish(m1, m2)                                   background upload thread
 ```
 
 1. `publish` appends the call's messages to the topic's open window in the buffer folder. A call is always written
-   whole into one window. The call is one Avro block, forced to disk before `publish` returns.
+   whole into one window. The call returns once it is forced to disk; blocks end only between calls.
 2. The window closes when it is `avro-file.max.seconds` old, when it reaches `avro-file.max.bytes`, or when a
    producer of the topic closes. It is forced to disk and renamed `.sealed.avro`.
 3. A background thread uploads sealed windows one at a time, in segment order: the store writes the temporary file and

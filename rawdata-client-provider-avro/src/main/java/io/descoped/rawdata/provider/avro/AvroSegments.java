@@ -18,12 +18,11 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -201,17 +200,18 @@ final class AvroSegments {
         if (headerBytes > MAX_HEADER_BYTES) {
             throw new IOException("The header of " + file + " is " + headerBytes + " bytes, more than a header takes");
         }
-        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ, StandardOpenOption.WRITE)) {
-            ByteBuffer header = ByteBuffer.allocate((int) headerBytes);
-            while (header.hasRemaining()) {
-                if (channel.read(header, header.position()) < 0) {
-                    throw new IOException("The file " + file + " is shorter than its header");
-                }
+        // A RandomAccessFile, not a FileChannel: an interrupted caller sealing the window must not close the file.
+        try (RandomAccessFile out = new RandomAccessFile(file.toFile(), "rw")) {
+            if (out.length() < headerBytes) {
+                throw new IOException("The file " + file + " is shorter than its header");
             }
-            for (Map.Entry<Integer, byte[]> value : summaryValues(header.array(), summary).entrySet()) {
-                channel.write(ByteBuffer.wrap(value.getValue()), value.getKey());
+            byte[] header = new byte[(int) headerBytes];
+            out.readFully(header);
+            for (Map.Entry<Integer, byte[]> value : summaryValues(header, summary).entrySet()) {
+                out.seek(value.getKey());
+                out.write(value.getValue());
             }
-            channel.force(true);
+            out.getFD().sync();
         }
     }
 

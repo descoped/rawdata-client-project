@@ -117,8 +117,8 @@ this repository.
   - **When a window closes:** on time (a timer), on size, or when a producer of the topic closes. It is then forced
     to disk, sealed (`*.sealed.avro`) and uploaded in the background as the next segment while publishes go on.
   - **Durability and visibility** (Ove, 2026-11-27, the same in every provider): a publish that returned survives a
-    crash of the process (each call is one Avro block, forced to disk before it returns; `local-temp-folder` must
-    outlive the process), and once a client has a producer of a topic, `lastMessage` holds everything the topic will
+    crash of the process (a call returns once its block is forced to disk; blocks end only between calls, and calls of
+    several threads share blocks and syncs, group commit; `local-temp-folder` must outlive the process), and once a client has a producer of a topic, `lastMessage` holds everything the topic will
     hold (the topic's writer, with its folder lock and recovery, starts in `producer`). A message is visible, and
     durable in the store, once its window is uploaded.
   - **Graceful shutdown** is `close()`, as in 2.x's `AutoCloseable` design. There is no shutdown hook.

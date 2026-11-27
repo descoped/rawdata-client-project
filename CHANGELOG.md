@@ -2,10 +2,11 @@
 
 ## 3.2.0
 
-- Two guarantees in every provider, checked by the TCK (`aReturnedPublishSurvivesACrashAndLastMessageHoldsItOnceAProducerExists`,
-  with the new hook `afterCrash`):
+- Two guarantees in every provider, checked by the TCK
+  (`aReturnedPublishSurvivesACrashAndLastMessageHoldsItOnceAProducerExists`, with the hooks `crashingConfiguration` and
+  `afterCrash`):
   - **A `publish` that returned survives a crash of the process.** postgres already committed each call. `filesystem`,
-    `gcs` and `s3` now end every publish call's Avro block and force it to disk before `publish` returns; before, a
+    `gcs` and `s3` now force every publish call's block to disk before `publish` returns; before, a
     crash lost the calls in the block being filled (up to `avro-file.sync.interval`, 512 KiB). `local-temp-folder`
     must outlive the process. `memory` keeps nothing past its process, as before.
   - **Once a client has a producer of a topic, `lastMessage` holds everything the topic will hold**, crash or not.
@@ -19,11 +20,13 @@
   outside it; one caller at a time syncs, for every call appended so far. Concurrent calls (threads or `publishAsync`)
   share blocks and syncs: on Linux in Docker, one-message calls per second are about 4,000 from one thread, 25,000
   from 16 and 65,000 from 64 (about 4,000 in each case if every call synced on its own under the lock). A single
-  thread that waits for each call pays one sync per call. About 20 bytes of Avro block framing per block in the segment. An append that fails halfway through a
-  call now fails the topic's writer, as no call after the last sync may be written with it.
+  thread that waits for each call pays one sync per call. About 20 bytes of Avro block framing per block in the
+  segment. The number of segments, requests and when consumers see a message are unchanged.
+  `avro-file.sync.interval` now only bounds Avro's block buffer and sizes the blocks of a window rewritten by recovery.
+- An append that fails halfway through a call now fails the topic's writer, as no call after the last sync may be
+  written with it. An interrupt while a publish waits for the disk throws `RawdataException` but leaves the writer
+  running; the call may still be stored.
 - `FilesystemPublishBenchmark` (`-Drawdata.bench=true`) measures publish calls per second on a disk.
-  The number of segments, requests and when consumers see a message are unchanged. `avro-file.sync.interval` now only
-  sizes Avro's block buffer and the blocks of a window rewritten by recovery.
 - The POM names the organisation, Descoped (https://descoped.io).
 
 ## 3.1.0

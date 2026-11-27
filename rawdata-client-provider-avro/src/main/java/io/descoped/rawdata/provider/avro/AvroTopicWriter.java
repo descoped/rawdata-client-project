@@ -12,6 +12,7 @@ import org.apache.avro.generic.GenericRecord;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
@@ -126,6 +127,7 @@ final class AvroTopicWriter {
         long blockStart; // where the block being filled starts
         long previousBlockStart; // where the block before it starts
         boolean torn; // a write failed in the middle of a call: only the forced blocks may be kept
+        boolean unforced; // blocks are written to the file that no sync has forced yet
         ScheduledFuture<?> timer;
         final Map<UUID, byte[]> digests = new HashMap<>(); // the window's ids, for the unique-id check (see NOT_SEEN)
 
@@ -241,10 +243,9 @@ final class AvroTopicWriter {
             window.count += stored.size();
             long ticket = ++appended;
             if (window.blockBytes >= settings.syncInterval()) {
-                endBlock(window); // bounds Avro's block buffer
-                markSynced(appended);
+                writeBlock(window); // bounds Avro's block buffer; the next sync, outside the lock, forces it
             }
-            if (window.out.getChannel().size() + window.blockBytes >= settings.maxBytes()) {
+            if (window.blockStart + window.blockBytes >= settings.maxBytes()) { // blockStart: the file's length
                 seal();
             }
             return ticket;
@@ -260,6 +261,10 @@ final class AvroTopicWriter {
      * filled, which holds every call appended so far, under the publish lock, and forces the file after releasing it,
      * so other callers go on appending meanwhile and are forced together by the next. The others wait, and those whose
      * calls it held return as soon as it is done. A sealed window was forced as it was sealed.
+     * <p>
+     * An interrupted caller never forces, and an interrupt does not fail the writer: the caller gets a
+     * {@link RawdataException} with its interrupt status kept, while its call stays appended and is forced by the next
+     * sync or seal. The publish may therefore be stored although it threw; with generated ids a retry stores it twice.
      *
      * @throws RawdataException if the writer failed before the call was forced, or the caller was interrupted
      */
@@ -276,6 +281,9 @@ final class AvroTopicWriter {
                 }
                 if (synced >= ticket) {
                     return;
+                }
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new RawdataException("Interrupted while waiting for the disk" + OF_TOPIC + topic);
                 }
                 forcingNow = true;
             }
@@ -303,9 +311,14 @@ final class AvroTopicWriter {
             }
             throwIfFailed();
             target = appended;
-            if (current != null && current.blockBytes > 0) {
-                writeBlock(current);
-                file = current.file;
+            if (current != null) {
+                if (current.blockBytes > 0) {
+                    writeBlock(current);
+                }
+                if (current.unforced) {
+                    current.unforced = false; // forced below; a later write sets it again
+                    file = current.file;
+                }
             }
         } catch (IOException e) {
             throw fail(storeFailure("Writing the upload window" + OF_TOPIC + topic, e));
@@ -316,18 +329,33 @@ final class AvroTopicWriter {
             if (file != null) {
                 force(file, target);
             }
+        } catch (ClosedByInterruptException e) {
+            unforced(file); // interrupted during the sync: the next caller forces it; the writer goes on
+            throw new RawdataException("Interrupted while forcing the upload window" + OF_TOPIC + topic + " to disk", e);
         } catch (IOException e) {
             throw fail(storeFailure("Forcing the upload window" + OF_TOPIC + topic + " to disk", e));
         }
         markSynced(target);
     }
 
+    private void unforced(Path file) {
+        appendLock.lock();
+        try {
+            if (current != null && current.file.equals(file)) {
+                current.unforced = true;
+            }
+        } finally {
+            appendLock.unlock();
+        }
+    }
+
     /**
      * Forces a window file to disk through a channel of its own: a sync flushes the file whichever channel wrote it,
      * and the writer's channel may be closed by a seal meanwhile. A file that is gone was sealed, and the seal forced it.
+     * The channel is opened for writing, without creating: Windows syncs a file only through a handle that may write.
      */
     private void force(Path file, long target) throws IOException {
-        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.WRITE)) {
             channel.force(false);
         } catch (NoSuchFileException e) {
             if (syncedThrough() < target) {
@@ -534,8 +562,8 @@ final class AvroTopicWriter {
         DataFileWriter<GenericRecord> writer = AvroSegments.writer(segment, tail.lastId());
         try {
             writer.setFlushOnEveryBlock(true);
-            AvroSegments.create(writer, out, settings.syncInterval()); // Avro never ends a block by itself; endBlock does
-            out.getChannel().force(true); // the header, so a crash right after leaves a readable window
+            AvroSegments.create(writer, out, settings.syncInterval()); // Avro never ends a block by itself; writeBlock does
+            out.getFD().sync(); // the header, so a crash right after leaves a readable window; not interruptible
         } catch (IOException | RuntimeException e) {
             out.close();
             Files.deleteIfExists(file);
@@ -571,18 +599,14 @@ final class AvroTopicWriter {
     /**
      * Writes the block being filled and forces it to disk, so the calls in it survive a crash of the process.
      */
-    private static void endBlock(Window window) throws IOException {
-        writeBlock(window);
-        window.out.getChannel().force(false);
-    }
-
     /**
-     * Writes the block being filled to the file, not forcing it.
+     * Writes the block being filled to the file, not forcing it: the window is then unforced until a sync forces it.
      */
     private static void writeBlock(Window window) throws IOException {
         window.previousBlockStart = window.blockStart;
         window.blockStart = window.writer.sync();
         window.blockBytes = 0;
+        window.unforced = true;
     }
 
     /**

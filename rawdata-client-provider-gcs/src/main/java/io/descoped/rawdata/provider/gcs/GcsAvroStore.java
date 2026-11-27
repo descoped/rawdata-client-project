@@ -4,7 +4,6 @@ import io.descoped.rawdata.provider.avro.AvroChecksums;
 import io.descoped.rawdata.provider.avro.AvroStore;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -32,7 +31,6 @@ import java.util.TreeSet;
  */
 final class GcsAvroStore implements AvroStore {
 
-    private static final int MAX_NAME_BYTES = 1024;
 
     private final GcsClient client;
     private final String bucket;
@@ -164,12 +162,7 @@ final class GcsAvroStore implements AvroStore {
     }
 
     private String metadata(String topic, String name) {
-        String object = prefix + topic + "/metadata/" + name;
-        if (object.getBytes(StandardCharsets.UTF_8).length > MAX_NAME_BYTES) {
-            throw new IllegalArgumentException("The metadata key is too long for an object name in GCS, at most "
-                    + MAX_NAME_BYTES + " bytes in UTF-8 with the prefix and topic: " + object);
-        }
-        return object;
+        return prefix + topic + "/metadata/" + name; // fits in 1024 bytes: the API's key limit and the prefix limit
     }
 
     @Override

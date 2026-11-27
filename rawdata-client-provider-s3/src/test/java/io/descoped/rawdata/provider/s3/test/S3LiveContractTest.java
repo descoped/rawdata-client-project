@@ -18,7 +18,6 @@ class S3LiveContractTest extends AvroClientContractTest {
         return LiveS3.configuration("contract/");
     }
 
-
     /**
      * A bucket name nobody has; S3 answers NoSuchBucket (or AccessDenied, should someone own it), both failures.
      */

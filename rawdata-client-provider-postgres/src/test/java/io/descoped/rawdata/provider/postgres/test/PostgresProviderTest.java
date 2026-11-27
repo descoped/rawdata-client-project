@@ -13,10 +13,14 @@ import org.junit.jupiter.api.Timeout;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -194,6 +198,7 @@ class PostgresProviderTest {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
             while (waitsForItsTurn.getState() != Thread.State.WAITING) { // parked on the client's turn
                 assertTrue(System.nanoTime() < deadline, "the second publish does not wait for its turn");
+                Thread.onSpinWait();
             }
             second.close();
             holder.commit();
@@ -220,7 +225,7 @@ class PostgresProviderTest {
             client.close();
             ExecutionException failed = assertThrows(ExecutionException.class, () -> publish.get(30, TimeUnit.SECONDS));
             RawdataClosedException closed = assertInstanceOf(RawdataClosedException.class, failed.getCause());
-            assertInstanceOf(java.sql.SQLException.class, closed.getCause());
+            assertInstanceOf(SQLException.class, closed.getCause());
             holder.commit();
         } finally {
             client.close();
@@ -237,7 +242,7 @@ class PostgresProviderTest {
         execute("DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rdc_noread') THEN "
                 + "CREATE ROLE rdc_noread LOGIN PASSWORD 'noread'; END IF; END $$");
         execute("GRANT USAGE ON SCHEMA public TO rdc_noread");
-        Map<String, String> configuration = new java.util.HashMap<>(Postgres18.configuration());
+        Map<String, String> configuration = new HashMap<>(Postgres18.configuration());
         configuration.put("postgres.driver.user", "rdc_noread");
         configuration.put("postgres.driver.password", "noread");
         String topic = topic();
@@ -245,7 +250,7 @@ class PostgresProviderTest {
             RawdataException failed = assertThrows(RawdataException.class, () -> client.lastMessage(topic));
             assertTrue(failed.getMessage().contains("read the last message of topic " + topic), failed.getMessage());
             assertTrue(failed.getMessage().contains("SQLState 42501"), failed.getMessage());
-            assertInstanceOf(java.sql.SQLException.class, failed.getCause());
+            assertInstanceOf(SQLException.class, failed.getCause());
         }
     }
 
@@ -257,7 +262,7 @@ class PostgresProviderTest {
     @Test
     void aPublishWakesTheClientsWaitingConsumersUnlessConfiguredOff() throws Exception {
         for (boolean wake : new boolean[]{true, false}) {
-            Map<String, String> configuration = new java.util.HashMap<>(Postgres18.configuration());
+            Map<String, String> configuration = new HashMap<>(Postgres18.configuration());
             configuration.put("rawdata.postgres.consumer.prefetch-poll-interval-when-empty", String.valueOf(TimeUnit.HOURS.toMillis(1)));
             configuration.put("rawdata.postgres.consumer.wake-on-publish", String.valueOf(wake));
             String topic = topic();
@@ -275,6 +280,7 @@ class PostgresProviderTest {
                 long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
                 while (receiver.getState() != Thread.State.TIMED_WAITING) { // the receive found nothing and waits
                     assertTrue(System.nanoTime() < deadline, "the receive does not wait");
+                    Thread.onSpinWait();
                 }
                 long published = System.nanoTime();
                 producer.publish(RawdataMessage.builder().position("woken").build());
@@ -299,7 +305,7 @@ class PostgresProviderTest {
         execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC");
         execute("GRANT USAGE ON SCHEMA public TO rdc_app");
         execute("GRANT SELECT, INSERT, UPDATE, DELETE ON rawdata_message, rawdata_content, rawdata_metadata TO rdc_app");
-        Map<String, String> configuration = new java.util.HashMap<>(Postgres18.configuration());
+        Map<String, String> configuration = new HashMap<>(Postgres18.configuration());
         configuration.put("postgres.driver.user", "rdc_app");
         configuration.put("postgres.driver.password", "app");
         String topic = topic();
@@ -401,7 +407,7 @@ class PostgresProviderTest {
 
     @Test
     void missingConfigurationIsReported() {
-        Map<String, String> configuration = new java.util.HashMap<>(Postgres18.configuration());
+        Map<String, String> configuration = new HashMap<>(Postgres18.configuration());
         configuration.remove("postgres.driver.user");
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(configuration));
         assertTrue(e.getMessage().contains("postgres.driver.user"));
@@ -412,15 +418,15 @@ class PostgresProviderTest {
 
     @Test
     void closingTheClientClosesItsPool() throws Exception {
-        java.util.Set<Long> before = backends();
+        Set<Long> before = backends();
         RawdataClient client = client();
         client.lastMessage(topic());
-        java.util.Set<Long> own = backends();
+        Set<Long> own = backends();
         own.removeAll(before); // this client's connections, whatever other clients do meanwhile
         assertFalse(own.isEmpty(), "the client holds connections");
         client.close();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
-        java.util.Set<Long> left = backends();
+        Set<Long> left = backends();
         left.retainAll(own);
         while (!left.isEmpty()) {
             assertTrue(System.nanoTime() < deadline, "closing the client closes its connections: " + left);
@@ -430,8 +436,8 @@ class PostgresProviderTest {
         assertTrue(client.isClosed());
     }
 
-    private static java.util.Set<Long> backends() throws Exception {
-        java.util.Set<Long> pids = new java.util.HashSet<>();
+    private static Set<Long> backends() throws Exception {
+        Set<Long> pids = new HashSet<>();
         try (Connection connection = Postgres18.connect(); Statement statement = connection.createStatement();
              ResultSet rows = statement.executeQuery("SELECT pid FROM pg_stat_activity WHERE application_name = 'rawdata-postgres'")) {
             while (rows.next()) {

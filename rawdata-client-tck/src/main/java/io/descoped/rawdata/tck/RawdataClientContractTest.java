@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.SplittableRandom;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -1022,7 +1023,7 @@ public abstract class RawdataClientContractTest {
      */
     private static String incompressible(int length) {
         String alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        java.util.SplittableRandom random = new java.util.SplittableRandom(length);
+        SplittableRandom random = new SplittableRandom(length);
         StringBuilder builder = new StringBuilder(length);
         for (int i = 0; i < length; i++) {
             builder.append(alphabet.charAt(random.nextInt(alphabet.length())));

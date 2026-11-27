@@ -49,8 +49,19 @@ final class Jdbc {
                 throw new RawdataClosedException("client closed during: " + operation, e);
             }
             throw new RawdataException("PostgreSQL failed to " + operation + " (SQLState " + e.getSQLState() + "): "
-                    + e.getMessage(), e);
+                    + firstLine(e.getMessage()), e);
         }
+    }
+
+    /**
+     * The database's message without its detail lines, which may show a row's values; the cause keeps them.
+     */
+    private static String firstLine(String message) {
+        if (message == null) {
+            return "";
+        }
+        int end = message.indexOf('\n');
+        return end < 0 ? message : message.substring(0, end);
     }
 
     private static <T> T commitOrRollback(Connection connection, Work<T> work) throws SQLException {

@@ -13,7 +13,6 @@ class GcsContractTest extends AvroClientContractTest {
         return FakeGcs.configuration(PREFIX);
     }
 
-
     @Override
     protected Map<String, String> missingStoreConfiguration() {
         Map<String, String> configuration = FakeGcs.configuration(PREFIX);

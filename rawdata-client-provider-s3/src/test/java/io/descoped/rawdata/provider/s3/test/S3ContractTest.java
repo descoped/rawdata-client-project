@@ -13,7 +13,6 @@ class S3ContractTest extends AvroClientContractTest {
         return S3Mock.configuration(PREFIX);
     }
 
-
     @Override
     protected Map<String, String> missingStoreConfiguration() {
         Map<String, String> configuration = S3Mock.configuration(PREFIX);

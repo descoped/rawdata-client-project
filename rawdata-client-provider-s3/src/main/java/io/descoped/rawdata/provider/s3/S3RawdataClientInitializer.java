@@ -54,8 +54,8 @@ import java.util.Set;
  * {@code avro-file.close-timeout-seconds} and {@code avro-file.upload.max-concurrency}. A message is visible to
  * consumers once its window is uploaded.
  * <p>
- * A metadata key is at most about 500 bytes in UTF-8, so that its object key fits in S3's 1024 bytes with the prefix
- * and topic; a longer key is refused with {@link IllegalArgumentException}.
+ * A metadata key is at most {@link io.descoped.rawdata.api.RawdataMetadataClient#MAX_KEY_BYTES} bytes in UTF-8, as in
+ * every provider; the prefix is limited so that such a key always fits in the 1024-byte object name.
  */
 @ProviderName("s3")
 public final class S3RawdataClientInitializer implements RawdataClientInitializer {

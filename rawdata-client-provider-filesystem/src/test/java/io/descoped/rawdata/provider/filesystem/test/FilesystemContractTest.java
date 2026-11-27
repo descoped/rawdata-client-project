@@ -27,7 +27,6 @@ class FilesystemContractTest extends AvroClientContractTest {
                 "listing.min-interval-seconds", "0");
     }
 
-
     /**
      * A missing folder is created, so the store that cannot exist is a folder inside a regular file.
      */

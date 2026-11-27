@@ -417,7 +417,8 @@ FROM rawdata_message WHERE topic = 'invoices' ORDER BY id;
 
 Every SQL failure leaves the provider as a `RawdataException` whose message names the operation, the topic and the
 SQLState, for example `PostgreSQL failed to publish to topic invoices (SQLState 40P01): …`, with the `SQLException`
-as its cause; as `RawdataClosedException` when the client closed meanwhile. No message's values are in the message. A failed transaction is rolled back; if the rollback fails too, that failure is added
+as its cause; as `RawdataClosedException` when the client closed meanwhile. The message keeps only the first line of
+PostgreSQL's error: its detail lines, which can show a row's values, are in the cause. A failed transaction is rolled back; if the rollback fails too, that failure is added
 to the original exception as suppressed, never in its place.
 
 | Symptom | Cause | What to do |

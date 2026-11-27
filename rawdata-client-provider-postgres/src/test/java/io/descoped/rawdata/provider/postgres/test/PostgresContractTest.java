@@ -14,8 +14,6 @@ class PostgresContractTest extends RawdataClientContractTest {
         return Postgres18.configuration();
     }
 
-
-
     @Override
     protected Map<String, String> missingStoreConfiguration() {
         Map<String, String> configuration = Postgres18.configuration();

@@ -1,5 +1,7 @@
 package io.descoped.rawdata.api;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -26,8 +28,8 @@ public interface RawdataMetadataClient {
      * @throws IllegalArgumentException if the key has a NUL character or is too long
      */
     static String requireValidKey(String key) {
-        RawdataDefaultMessage.requireNoNul(java.util.Objects.requireNonNull(key, "key"), "A metadata key");
-        int bytes = key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        RawdataDefaultMessage.requireNoNul(Objects.requireNonNull(key, "key"), "A metadata key");
+        int bytes = key.getBytes(StandardCharsets.UTF_8).length;
         if (bytes > MAX_KEY_BYTES) {
             throw new IllegalArgumentException("A metadata key is at most " + MAX_KEY_BYTES + " bytes in UTF-8: " + bytes);
         }

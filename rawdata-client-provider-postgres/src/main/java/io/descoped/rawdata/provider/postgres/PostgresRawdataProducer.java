@@ -69,7 +69,6 @@ final class PostgresRawdataProducer extends OrderedRawdataProducer {
         client.published(topic);
     }
 
-
     private static void lockTopic(Connection connection, String topic) throws SQLException {
         try (PreparedStatement lock = connection.prepareStatement("SELECT pg_advisory_xact_lock(?, hashtext(?))")) {
             lock.setInt(1, PostgresSchema.TOPIC_LOCK);

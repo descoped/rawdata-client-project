@@ -20,7 +20,6 @@ class GcsLiveContractTest extends AvroClientContractTest {
         return LiveGcs.configuration(PREFIX);
     }
 
-
     /**
      * A bucket name nobody has; GCS answers 404 (or 403, should someone own it), both failures.
      */

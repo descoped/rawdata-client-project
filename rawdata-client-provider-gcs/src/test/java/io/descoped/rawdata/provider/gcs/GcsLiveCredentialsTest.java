@@ -1,7 +1,5 @@
 package io.descoped.rawdata.provider.gcs;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -9,7 +7,6 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import java.io.IOException;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
@@ -25,7 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Token refresh against Google with the credentials of the live tests ({@link LiveGcs}): a token that expires is
+ * Token refresh against Google with the credentials file of the live tests ({@link LiveGcs}), a gcloud user's or a
+ * service account key: a token that expires is
  * fetched again, and a token GCS refuses (401) is fetched again and the call goes on. No token is logged or shown in
  * an assertion message.
  */
@@ -71,7 +69,7 @@ class GcsLiveCredentialsTest {
     @Test
     void anExpiredTokenIsFetchedAgain() throws IOException {
         MovableClock clock = new MovableClock();
-        GcsCredentials credentials = authorizedUser(clock);
+        GcsCredentials credentials = credentialsFile(clock);
         GcsClient gcs = new GcsClient(http, GcsClient.DEFAULT_ENDPOINT, credentials);
         String object = LiveGcs.RUN + PREFIX + "expired";
         assertTrue(gcs.upload(LiveGcs.bucket(), object, "application/octet-stream", CONTENT, 0, false));
@@ -89,7 +87,7 @@ class GcsLiveCredentialsTest {
      */
     @Test
     void aRefusedTokenIsFetchedAgainAndTheCallGoesOn() throws IOException {
-        GcsCredentials real = authorizedUser(Clock.systemUTC());
+        GcsCredentials real = credentialsFile(Clock.systemUTC());
         AtomicInteger invalidated = new AtomicInteger();
         GcsCredentials refusedFirst = new GcsCredentials() {
             @Override
@@ -111,19 +109,15 @@ class GcsLiveCredentialsTest {
     }
 
     /**
-     * The gcloud user's credentials of the live tests, with the given clock.
+     * The credentials file of the live tests, with the given clock: {@code -Drawdata.gcs.live.key-file} (a service
+     * account key) if given, else {@code GOOGLE_APPLICATION_CREDENTIALS} (a gcloud user or a service account key).
      */
-    private GcsCredentials authorizedUser(Clock clock) throws IOException {
-        String file = System.getenv("GOOGLE_APPLICATION_CREDENTIALS");
+    private GcsCredentials credentialsFile(Clock clock) throws IOException {
+        String file = System.getProperty("rawdata.gcs.live.key-file", System.getenv("GOOGLE_APPLICATION_CREDENTIALS"));
         if (file == null) {
-            throw new IllegalStateException("The credentials tests need GOOGLE_APPLICATION_CREDENTIALS");
+            throw new IllegalStateException("The credentials tests need -Drawdata.gcs.live.key-file or GOOGLE_APPLICATION_CREDENTIALS");
         }
-        JsonNode json = new ObjectMapper().readTree(Files.readAllBytes(Path.of(file)));
-        if (!"authorized_user".equals(json.path("type").asText())) {
-            throw new IllegalStateException("The credentials tests need a gcloud user's credentials (authorized_user)");
-        }
-        return new GcsCredentials.AuthorizedUser(json.path("client_id").asText(), json.path("client_secret").asText(),
-                json.path("refresh_token").asText(), json.path("token_uri").asText(GcsCredentials.GOOGLE_TOKEN_URI), http, clock);
+        return GcsCredentials.fromFile(Path.of(file), http, clock);
     }
 
     @AfterAll

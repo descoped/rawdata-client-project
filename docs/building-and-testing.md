@@ -38,7 +38,7 @@ The build fails fast on mistakes that are easy to miss:
 | `rawdata-client-provider-avro` | the engine's internals: the topic writer's failure paths, interrupted publishers, writer start, ranged reads; its behaviour through `filesystem`, `gcs` and `s3` | class path | |
 | `rawdata-client-provider-postgres` | the contract and the provider's own tests on PostgreSQL 18 (`postgres:18-alpine`) | class path | Docker |
 | `rawdata-client-provider-filesystem` | the contract, the store contract and the provider's tests; a publish benchmark with `-Drawdata.bench=true` | class path | |
-| `rawdata-client-provider-gcs` | the contract and the provider's tests against `fsouza/fake-gcs-server`; the client and credentials against a local server | class path | Docker |
+| `rawdata-client-provider-gcs` | the contract and the provider's tests against `fsouza/fake-gcs-server`; the client and credentials against a local server; live tests against a real bucket with `-Drawdata.gcs.live=true` | class path | Docker (live: Google credentials) |
 | `rawdata-client-provider-s3` | the contract and the provider's tests against `adobe/s3mock`; live tests against real S3 with `-Drawdata.s3.live=true` | class path | Docker (live: AWS credentials) |
 | `rawdata-copy-util` | the tool: arguments, copies, resume, filesystem → postgres | class path | Docker |
 
@@ -95,9 +95,8 @@ Central, publishes its GitHub release (see [releasing](releasing.md)).
 
 - **PostgreSQL 18:** `docker compose up -d` in `rawdata-client-provider-postgres` (port 5432, user and database
   `rdc`, password `rdc`).
-- **A real GCS bucket:** the [`gcs` configuration](modules/rawdata-client-provider-gcs.md#configuration) with
-  `gcs.credential-provider=application-default` after `gcloud auth application-default login`. The copy tool is the
-  easiest way to try it.
+- **A real GCS bucket:** the [live tests](modules/rawdata-client-provider-gcs.md#testing), or the [`gcs`
+  configuration](modules/rawdata-client-provider-gcs.md#configuration) with `gcs.credential-provider=application-default`.
 - **Real S3:** the [live tests](modules/rawdata-client-provider-s3.md#testing), or the [`s3`
   configuration](modules/rawdata-client-provider-s3.md#configuration) with an AWS profile.
 

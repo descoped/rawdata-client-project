@@ -107,15 +107,22 @@ abstract class GcsCredentials {
      * @throws IllegalArgumentException if it is not such a file, or of a type this provider does not support
      */
     static GcsCredentials fromFile(Path file, HttpClient http) throws IOException {
+        return fromFile(file, http, Clock.systemUTC());
+    }
+
+    /**
+     * Reads a credentials file, with the clock that times its tokens.
+     */
+    static GcsCredentials fromFile(Path file, HttpClient http, Clock clock) throws IOException {
         JsonNode json = JSON.readTree(Files.readAllBytes(file));
         String type = json.path("type").asText("");
         switch (type) {
             case "service_account":
                 return new ServiceAccount(text(json, "client_email", file), privateKey(text(json, "private_key", file), file),
-                        json.path("private_key_id").asText(null), json.path("token_uri").asText(GOOGLE_TOKEN_URI), http, Clock.systemUTC());
+                        json.path("private_key_id").asText(null), json.path("token_uri").asText(GOOGLE_TOKEN_URI), http, clock);
             case "authorized_user":
                 return new AuthorizedUser(text(json, "client_id", file), text(json, "client_secret", file),
-                        text(json, REFRESH_TOKEN, file), json.path("token_uri").asText(GOOGLE_TOKEN_URI), http, Clock.systemUTC());
+                        text(json, REFRESH_TOKEN, file), json.path("token_uri").asText(GOOGLE_TOKEN_URI), http, clock);
             default:
                 throw new IllegalArgumentException("Credentials file " + file + " has type '" + type
                         + "'; the gcs provider supports service_account and authorized_user files, and the metadata server");

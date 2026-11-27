@@ -40,6 +40,9 @@
 - `filesystem`, `gcs` and `s3` refuse `avro-file.max.bytes` above 1 GiB (`AvroUploadWindow.MAX_BYTES_LIMIT`) with
   `IllegalArgumentException` when the client is created. An upload reads the whole window into one array; before, a
   window of 2 GiB or more failed every upload with `OutOfMemoryError`.
+- `receiveUpTo`: a read that fails after it took its first messages returns them, and the next receive reads again
+  (and fails again if the store still fails), as after a close or an interrupt. Before, the messages taken were lost.
+- `RawdataMessage.hashCode` no longer depends on the order of the content keys, as `equals` does not.
 - The POM names the organisation, Descoped (https://descoped.io).
 
 ## 3.1.0

@@ -50,7 +50,8 @@ public abstract class PollingRawdataConsumer implements RawdataConsumer {
 
     /**
      * Reads the messages after the last one read, if there are any, into the buffer, in order. Called with the turn
-     * held, when the buffer is empty.
+     * held, when the buffer is empty. If it throws, the messages it put in the buffer are kept and delivered, and the
+     * read position must not have moved past any message it did not put there, so that the next read finds it.
      *
      * @param buffer where the messages go
      */

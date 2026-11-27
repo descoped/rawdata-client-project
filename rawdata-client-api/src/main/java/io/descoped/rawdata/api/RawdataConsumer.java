@@ -40,8 +40,9 @@ public interface RawdataConsumer extends AutoCloseable {
     /**
      * Receives up to a number of messages: waits up to the timeout for the first, then takes the messages that are
      * available at once, until there are {@code maxMessages}. The position moves to the last message returned. If
-     * the consumer is closed or the thread interrupted after the first message, the messages received so far are
-     * returned (with the interrupt flag set again), so none is lost.
+     * the consumer is closed, the thread interrupted or a read fails after the first message, the messages received
+     * so far are returned (with the interrupt flag set again), so none is lost; the next receive reads again, and fails
+     * again if the store still fails.
      *
      * @param maxMessages the most messages to return, 1 or more
      * @param timeout     how long to wait for the first message; zero returns at once
@@ -71,8 +72,8 @@ public interface RawdataConsumer extends AutoCloseable {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
-            } catch (RawdataClosedException e) {
-                break;
+            } catch (RuntimeException e) {
+                break; // closed, or a failed read: the messages taken are returned; the next receive reads again
             }
         }
         return messages;

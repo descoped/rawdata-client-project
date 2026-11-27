@@ -265,17 +265,9 @@ message it handled.
 | `put(key, value)` | writes, replacing any value; returns the metadata client |
 | `remove(key)` | removes; does nothing for a missing key; returns the metadata client |
 
-A key is any string without NUL, the empty string included, and case matters. How long a key may be depends on the
-store; every provider takes at least `RawdataMetadataClient.PORTABLE_KEY_BYTES`, 127 bytes of UTF-8:
-
-| Provider | Longest key, UTF-8 bytes |
-|---|---|
-| `filesystem` | 127 (the key is a file name in hex) |
-| `gcs`, `s3` | (1024 − the bytes of `<prefix><topic>/metadata/k`) / 2, about 500 |
-| `postgres` | 2000 |
-| `memory` | no limit |
-
-A longer key is refused by `put`, `get` and `remove` with `IllegalArgumentException`. Metadata is written to the
+A key is any string without NUL, the empty string included, and case matters, of at most 127 bytes of UTF-8
+(`RawdataMetadataClient.MAX_KEY_BYTES`) in every provider: the smallest every store holds (the filesystem provider
+stores a key as a file name in hex), so metadata copies between providers. A longer key is refused by `put`, `get` and `remove` with `IllegalArgumentException`. Metadata is written to the
 store at once, also in the Avro providers: it does not go through the upload window.
 
 **Why.** A checkpoint next to the data it describes moves with the topic (the copy tool copies it with `--metadata`)
@@ -627,7 +619,7 @@ writer](modules/rawdata-client-provider-s3.md#telling-a-lost-response-from-anoth
 JUnit 6 tests. `RawdataClientContractTest` checks everything an application can see through the API;
 `AvroClientContractTest` adds the upload window; `AvroStoreContractTest` checks an `AvroStore` directly. A provider's
 test class extends one, describes the provider through hooks (`configuration()`, `clientsShareTheStore()`,
-`metadataKeyLimit(topic)`, `missingStoreConfiguration()`, `awaitPublished(client, topic)`), and runs every inherited
+`missingStoreConfiguration()`, `awaitPublished(client, topic)`), and runs every inherited
 test.
 
 A provider is compliant only if it passes the TCK unchanged: no skipped, overridden or edited test. Hooks describe a
@@ -635,8 +627,8 @@ provider; they never relax a behaviour. Two rules follow:
 
 - A behaviour test goes in the TCK, never in one provider's tests, which only check internals: SQL, files and
   objects, configuration, credentials.
-- Backend limits are declared, not failed: a provider declares its longest metadata key, which must be at least 127
-  bytes.
+- The limits are the same in every provider, the smallest every store holds, and the API checks them: a position or
+  content key of at most 2000 bytes, a metadata key of at most 127. A provider declares no limits of its own.
 
 **Why.** Providers can be swapped only if they behave the same. One set of tests, run against every provider, is the
 proof, and the reason [code tested against one provider holds for another](tutorial.md#step-12-switch-the-store).
@@ -713,7 +705,7 @@ else writes the target topic.
 | ordering group | the name of a sequence written by several threads | [Ordering group and sequence number](#ordering-group-and-sequence-number) |
 | `ORDER` | `RawdataIds.ORDER`, the unsigned order of ids | [Id and order](#id-and-order) |
 | position | your own identifier of a message | [Position](#position) |
-| `PORTABLE_KEY_BYTES` | 127, the metadata key length every provider takes | [Metadata](#metadata) |
+| `MAX_KEY_BYTES` | 127, the longest metadata key, in UTF-8 bytes, in every provider | [Metadata](#metadata) |
 | producer | `RawdataProducer`, publishes to one topic | [Producer](#producer) |
 | provider | the implementation of the API for one kind of store, chosen by name | [Provider and discovery](#provider-and-discovery) |
 | pull | reading only when the caller asks | [Pull reading](#pull-reading) |

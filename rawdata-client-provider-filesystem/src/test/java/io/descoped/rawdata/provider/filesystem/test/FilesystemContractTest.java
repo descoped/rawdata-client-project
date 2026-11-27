@@ -9,7 +9,6 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
-import java.util.OptionalInt;
 import java.util.UUID;
 
 class FilesystemContractTest extends AvroClientContractTest {
@@ -26,14 +25,6 @@ class FilesystemContractTest extends AvroClientContractTest {
                 "avro-file.max.seconds", "1",
                 "avro-file.sync.interval", "200",
                 "listing.min-interval-seconds", "0");
-    }
-
-    /**
-     * A file name is at most 255 characters: {@code k} and the key in hex.
-     */
-    @Override
-    protected OptionalInt metadataKeyLimit(String topic) {
-        return OptionalInt.of(127);
     }
 
     /**

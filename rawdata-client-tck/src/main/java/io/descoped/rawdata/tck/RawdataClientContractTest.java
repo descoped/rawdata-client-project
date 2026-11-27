@@ -24,8 +24,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalInt;
 import java.util.Set;
+import java.util.SplittableRandom;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -93,17 +93,6 @@ public abstract class RawdataClientContractTest {
      */
     protected boolean clientsShareTheStore() {
         return true;
-    }
-
-    /**
-     * The longest metadata key the provider takes for a topic, in UTF-8 bytes, as its documentation states; empty if
-     * it has no limit. Every provider takes at least {@link RawdataMetadataClient#PORTABLE_KEY_BYTES}.
-     *
-     * @param topic the topic, for stores where the limit depends on it
-     * @return the limit, or empty
-     */
-    protected OptionalInt metadataKeyLimit(String topic) {
-        return OptionalInt.empty();
     }
 
     /**
@@ -959,7 +948,7 @@ public abstract class RawdataClientContractTest {
     @Test
     public void metadataKeysAreAnyStringWithoutNul() {
         List<String> keys = List.of("Key", "key", "", "..", "../escape", "a/b", "ü € 😀", ".hidden",
-                "x".repeat(RawdataMetadataClient.PORTABLE_KEY_BYTES));
+                "x".repeat(RawdataMetadataClient.MAX_KEY_BYTES));
         RawdataMetadataClient metadata = client.metadata(topic);
         for (int i = 0; i < keys.size(); i++) {
             metadata.put(keys.get(i), new byte[]{(byte) i});
@@ -979,21 +968,14 @@ public abstract class RawdataClientContractTest {
     }
 
     /**
-     * A key at the provider's limit works; one byte longer is refused with IllegalArgumentException by put, get and
-     * remove, and nothing is written. A provider without a limit takes a long key.
+     * A key at the limit, {@link RawdataMetadataClient#MAX_KEY_BYTES} bytes in UTF-8, works, also when it does not
+     * compress; one byte longer is refused with IllegalArgumentException by put, get and remove, and nothing is
+     * written. The same in every provider.
      */
     @Test
-    public void aMetadataKeyOverTheProvidersLimitIsRefused() {
+    public void aMetadataKeyOverTheLimitIsRefused() {
         RawdataMetadataClient metadata = client.metadata(topic);
-        OptionalInt limit = metadataKeyLimit(topic);
-        assertTrue(limit.orElse(Integer.MAX_VALUE) >= RawdataMetadataClient.PORTABLE_KEY_BYTES, "below the portable length: " + limit);
-        if (limit.isEmpty()) {
-            String longKey = "k".repeat(10_000);
-            metadata.put(longKey, new byte[]{1});
-            assertArrayEquals(new byte[]{1}, metadata.get(longKey));
-            return;
-        }
-        String atLimit = "k".repeat(limit.getAsInt());
+        String atLimit = incompressible(RawdataMetadataClient.MAX_KEY_BYTES);
         String overLimit = atLimit + "k";
         byte[] value = {1};
         metadata.put(atLimit, value);
@@ -1002,6 +984,51 @@ public abstract class RawdataClientContractTest {
         assertThrows(IllegalArgumentException.class, () -> metadata.get(overLimit));
         assertThrows(IllegalArgumentException.class, () -> metadata.remove(overLimit));
         assertEquals(Set.of(atLimit), metadata.keys());
+    }
+
+    /**
+     * A position and a content key at the limit ({@link RawdataMessage#MAX_POSITION_BYTES},
+     * {@link RawdataMessage#MAX_CONTENT_KEY_BYTES}) are stored and read back, also when they do not compress; one byte
+     * longer is refused with IllegalArgumentException when published, and nothing of the call is written. The same in
+     * every provider.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    public void aPositionOrContentKeyOverTheLimitIsRefused() throws Exception {
+        String position = incompressible(RawdataMessage.MAX_POSITION_BYTES);
+        String key = incompressible(RawdataMessage.MAX_CONTENT_KEY_BYTES - 1) + "k";
+        try (RawdataProducer producer = client.producer(topic)) {
+            producer.publish(RawdataMessage.builder().position(position).put(key, new byte[]{1}).build());
+            RawdataMessage good = RawdataMessage.builder().position("good").put("k", new byte[]{2}).build();
+            RawdataMessage longPosition = RawdataMessage.builder().position(position + "x").build();
+            RawdataMessage longKey = RawdataMessage.builder().position("p").put(key + "x", new byte[]{3}).build();
+            assertThrows(IllegalArgumentException.class, () -> producer.publish(good, longPosition));
+            assertThrows(IllegalArgumentException.class, () -> producer.publish(good, longKey));
+            ExecutionException async = assertThrows(ExecutionException.class,
+                    () -> producer.publishAsync(good, longKey).get(30, TimeUnit.SECONDS));
+            assertInstanceOf(IllegalArgumentException.class, async.getCause());
+        }
+        awaitPublished(client, topic);
+        try (RawdataConsumer consumer = client.consumer(topic)) {
+            List<? extends RawdataMessage> read = consumer.receiveUpTo(10, Duration.ofSeconds(5));
+            assertEquals(1, read.size(), "nothing of a refused call is written");
+            assertEquals(position, read.get(0).position());
+            assertArrayEquals(new byte[]{1}, read.get(0).get(key));
+        }
+    }
+
+    /**
+     * Characters without repeats a store could compress away, as an id or a cursor from a source system has.
+     */
+    private static String incompressible(int length) {
+        String alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        SplittableRandom random = new SplittableRandom(length);
+        StringBuilder builder = new StringBuilder(length);
+        for (int i = 0; i < length; i++) {
+            builder.append(alphabet.charAt(random.nextInt(alphabet.length())));
+        }
+        return builder.toString();
     }
 
     // ---- a crash of the writing process

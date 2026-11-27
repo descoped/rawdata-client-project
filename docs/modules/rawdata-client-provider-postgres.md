@@ -230,15 +230,15 @@ In words, [`PostgresRawdataProducer.write`][PostgresRawdataProducer.java]:
 2. Begin a transaction and take the topic's advisory lock. If another publish holds it, wait.
 3. Read the topic's last id (or the beginning of time for an empty topic).
 4. Run the one-writer check.
-5. Give each message without an id the next id after the one before it (`RawdataIds.next`). A message with an id of
-   its own, as the copy tool gives, must have an id greater than the one before it, or the publish fails with
-   `IllegalArgumentException`.
+5. Give each message without an id the next id after the greatest so far (`RawdataIds.next`). A message with an id
+   of its own, as the copy tool gives, keeps it, in any order; a message already stored under its id is left out
+   (the same message again is a no-op), and a different one fails the call with `RawdataDuplicateIdException`.
 6. Insert one `rawdata_message` row per message and one `rawdata_content` row per content key, as two JDBC batches.
 7. Commit, which releases the advisory lock, and remember the last id written.
 
 Any failure in steps 2 to 7 rolls the transaction back: the call is written whole or not at all. The tests publish a
-good message together with one whose given id is too old, and check that neither the message nor its content was
-stored.
+good message together with a different message under an id already stored, and check that neither the good message
+nor its content was stored.
 
 `publishAsync` runs the same `publish` on the client's thread pool (daemon threads named `rawdata-postgres-<n>`).
 
@@ -277,8 +277,10 @@ after (or, for an inclusive start, from) an id, ordered by id, joined with their
 
 When a fetch finds nothing, the receive waits
 `rawdata.postgres.consumer.prefetch-poll-interval-when-empty` milliseconds (or until its timeout, if that is
-sooner) and fetches again. A publish does not wake the client's consumers, so a consumer that has caught up sees a
-new message up to one poll interval after its commit; 250 ms by default.
+sooner) and fetches again. A publish through the same client wakes that client's waiting consumers of the topic,
+which fetch at once, as the Avro providers' consumers do after an upload
+(`rawdata.postgres.consumer.wake-on-publish`, on by default). A message from another process is seen up to one poll
+interval after its commit; 250 ms by default.
 
 Where a consumer starts:
 
@@ -311,18 +313,19 @@ keeps each entry as a row of `rawdata_metadata`. Each call is its own transactio
 
 Metadata writes do not take the topic lock and are not part of the one-writer check.
 
-**A key is at most 2000 bytes in UTF-8.** The key is part of the primary key's btree index, and a PostgreSQL index
-entry holds somewhat less than a third of a page (about 2700 bytes for 8 kB pages), so the provider stops well below
-that. A longer key is refused by `put`, `get` and `remove` with `IllegalArgumentException` before the database sees
-it. Keys of up to 127 bytes (`RawdataMetadataClient.PORTABLE_KEY_BYTES`) work in every provider; stay within that if
-you might move to another provider.
+**Limits.** A PostgreSQL btree index entry holds somewhat less than a third of a page (about 2700 bytes for 8 kB
+pages), and the metadata key, the position and the content key are in btree indexes. The API's limits, the same in
+every provider, stay below that: a metadata key of at most 127 bytes in UTF-8, a position and a content key of at
+most 2000. A longer one is refused with `IllegalArgumentException` before the database sees it.
 
 ### Closing
 
 `client.close()` closes the client's producers and consumers, stops its thread pool (pending `publishAsync` and
 `receiveAsync` calls fail with `RawdataClosedException`) and closes the connection pool. A receive that is waiting
-fails with `RawdataClosedException`. After that every method throws `RawdataClosedException`, except `isClosed()` and
-`close()`. Closing a producer does not flush anything, because nothing is buffered.
+fails with `RawdataClosedException`, and so does a publish under way: closing the pool aborts its transaction, so it
+writes nothing. A publish that waited for its turn while its producer closed writes nothing either. After that every
+method throws `RawdataClosedException`, except `isClosed()` and `close()`. Closing a producer does not flush anything,
+because nothing is buffered.
 
 ## Configuration
 
@@ -339,6 +342,7 @@ Pass these keys in the map given to `RawdataClient.create`. The whole map goes t
 | `postgres.driver.max-pool-size` | `10` | most connections the client's pool opens; a positive whole number |
 | `rawdata.postgres.consumer.prefetch-size` | `100` | most messages a consumer reads per query; a positive whole number |
 | `rawdata.postgres.consumer.prefetch-poll-interval-when-empty` | `250` | milliseconds a consumer that found nothing waits before it queries again; a positive whole number |
+| `rawdata.postgres.consumer.wake-on-publish` | `true` | whether a publish wakes the same client's waiting consumers of the topic, which then query at once; `true` or `false` |
 
 Fixed settings, not configurable: auto-commit off, READ COMMITTED, `ApplicationName=rawdata-postgres`, pool name
 `rawdata-postgres`, and HikariCP's defaults for everything else (for example, a caller waits at most 30 seconds for
@@ -353,6 +357,9 @@ Choosing values:
   the messages' content. Lower it for large messages; raise it for many small ones read in bulk.
 - **`prefetch-poll-interval-when-empty`** trades latency for load. Each consumer that has caught up runs one query per
   interval.
+- **`wake-on-publish`** gives a consumer of the same client a publish at once. It costs a query per publish for each
+  consumer of the topic that waits: on a quiet topic, as many queries as publishes; on a busy one, consumers seldom
+  wait. Set it to `false` to bound the queries by the poll interval alone.
 
 With the [copy tool](rawdata-copy-util.md), prefix the keys with `source.` or `target.`, for example
 `target.postgres.driver.host`.
@@ -408,8 +415,10 @@ FROM rawdata_message WHERE topic = 'invoices' ORDER BY id;
 
 ## Failure modes and troubleshooting
 
-Every SQL failure leaves the provider as a `RawdataException` with the message `PostgreSQL: ...` and the
-`SQLException` as its cause. A failed transaction is rolled back; if the rollback fails too, that failure is added
+Every SQL failure leaves the provider as a `RawdataException` whose message names the operation, the topic and the
+SQLState, for example `PostgreSQL failed to publish to topic invoices (SQLState 40P01): …`, with the `SQLException`
+as its cause; as `RawdataClosedException` when the client closed meanwhile. The message keeps only the first line of
+PostgreSQL's error: its detail lines, which can show a row's values, are in the cause. A failed transaction is rolled back; if the rollback fails too, that failure is added
 to the original exception as suppressed, never in its place.
 
 | Symptom | Cause | What to do |
@@ -421,7 +430,7 @@ to the original exception as suppressed, never in its place.
 | `RawdataException` from `create` mentioning `permission denied` | the tables are missing and the role may not create them | create the tables once with a role that may, then grant the role `SELECT, INSERT, UPDATE, DELETE` (see [privileges](#database-setup-and-privileges)) |
 | `RawdataWriterConflictException` from `publish` | another process wrote the topic since this client last did | see below |
 | `RawdataDuplicateIdException` from `publish` | a given id is taken in the topic, or earlier in the call, by a message with another position, ordering or content | give no id, or unique ids |
-| `IllegalArgumentException` from a metadata call: "at most 2000 bytes in UTF-8 in postgres" | the key is too long | use a shorter key |
+| `IllegalArgumentException`: "at most 127 bytes in UTF-8" from a metadata call, or "at most 2000 bytes" from a publish | a metadata key, a position or a content key is over the limit of every provider | use a shorter one |
 | `RawdataException` after about 30 seconds, mentioning a connection timeout | all `max-pool-size` connections were busy | raise `max-pool-size`, or use fewer concurrent consumers per client |
 | A consumer sees new messages late | it polls every `prefetch-poll-interval-when-empty` ms | lower the interval |
 
@@ -458,14 +467,16 @@ and each test uses topics of its own. They run on the class path, where the prov
 `META-INF/services`; the module path is covered by the JPMS smoke test (`src/it/jpms/run.sh`).
 
 - [`PostgresContractTest`][PostgresContractTest.java]
-  runs the provider contract, `RawdataClientContractTest` from [the TCK](rawdata-client-tck.md), unchanged. It
-  declares the metadata key limit (2000) and a configuration whose database does not exist.
+  runs the provider contract, `RawdataClientContractTest` from [the TCK](rawdata-client-tck.md), unchanged, with a
+  configuration whose database does not exist.
 - [`PostgresProviderTest`][PostgresProviderTest.java]
   checks what the contract cannot see: stored ids are PostgreSQL UUIDv7s; PostgreSQL orders ids as `RawdataIds.ORDER`
   does; a publish waiting for the topic lock reads the holder's commit even when the role defaults to REPEATABLE
   READ; a role without `CREATE` can use existing tables; eight clients starting together create the schema once; a
   failed publish writes no message and no content; topics are rows, not tables; missing configuration is reported;
-  closing a client closes its connections.
+  closing a client closes its connections; a publish that waited for its turn writes nothing once its producer
+  closed, and one under way when the client closes is reported closed and writes nothing; a database failure names
+  the operation and the SQLState; a publish wakes the client's waiting consumers unless configured off.
 
 Run them with:
 
@@ -511,7 +522,7 @@ here so you can read them.
 | [`PostgresRawdataClient`][PostgresRawdataClient.java] | the `RawdataClient`: owns the pool, the thread pool, the per-topic in-process locks and the last id written per topic |
 | [`PostgresRawdataProducer`][PostgresRawdataProducer.java] | extends `OrderedRawdataProducer`; `write` does the locked, checked publish |
 | [`PostgresRawdataConsumer`][PostgresRawdataConsumer.java] | extends `PollingRawdataConsumer`; `fill` reads the next page, `reposition` serves `seek` |
-| [`PostgresRawdataMetadataClient`][PostgresRawdataMetadataClient.java] | `RawdataMetadataClient` on `rawdata_metadata`; `MAX_KEY_BYTES = 2000` |
+| [`PostgresRawdataMetadataClient`][PostgresRawdataMetadataClient.java] | `RawdataMetadataClient` on `rawdata_metadata` |
 | [`PostgresCursor`][PostgresCursor.java] | the `RawdataCursor`: an id and whether it is inclusive |
 | [`PostgresMessages`][PostgresMessages.java] | the SQL that reads and writes messages and their content |
 | [`PostgresSchema`][PostgresSchema.java] | the DDL, the advisory lock classes (`SCHEMA_LOCK`, `TOPIC_LOCK`) and the create-if-missing logic |

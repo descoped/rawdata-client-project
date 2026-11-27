@@ -197,9 +197,9 @@ A topic's metadata is a set of key-value pairs, for example a checkpoint of a co
 
 So any key works, including an empty one, one with `/`, `..` or a leading `.`, and keys that differ only by case: none
 of them reaches the file system as given. The cost is length. A file name is at most 255 characters, so a key is at
-most **127 bytes in UTF-8** (127 ASCII characters, fewer for other scripts). That equals
-`RawdataMetadataClient.PORTABLE_KEY_BYTES`, the length every provider accepts. A longer key is refused with
-`IllegalArgumentException`.
+most **127 bytes in UTF-8** (127 ASCII characters, fewer for other scripts). That is why
+`RawdataMetadataClient.MAX_KEY_BYTES`, the limit in every provider, is 127. A longer key is refused with
+`IllegalArgumentException` by the API.
 
 `put` writes the value to a temporary file in the topic folder and moves it over the entry's name with an atomic
 move. A reader sees the old value or the new one, never a mix. Metadata is not part of the one-writer check: the last
@@ -389,7 +389,7 @@ with advice on tuning them, in [Avro engine: configuration](rawdata-client-provi
 | Messages are not visible right after `publish` | they are in the open window | close the producer, wait `avro-file.max.seconds`, or call `AvroRawdataClient.flush(topic)` in tests |
 | `RawdataException: The buffer folder <folder> of topic '<topic>' is in use by another client` | another client, in this JVM or another process, writes the topic from the same `local-temp-folder` | write each topic from one client; give each process a buffer folder of its own |
 | `RawdataWriterConflictException: Another client published to topic '<topic>'` | another process wrote the topic, with a buffer folder of its own | stop the second writer; a client created after it stopped starts from the topic's end. The windows set aside are kept as `*.invalid` in the buffer folder |
-| `IllegalArgumentException: A metadata key of the filesystem provider is at most 127 bytes in UTF-8` | the key's file name would exceed 255 characters | use a key of at most 127 bytes |
+| `IllegalArgumentException: A metadata key is at most 127 bytes in UTF-8` | the key is over the limit of every provider | use a key of at most 127 bytes |
 | `RawdataException` with "Uploading segment … failed" (for example, permission denied) | the store could not write the segment | fix the folder; the writer stays failed until it is closed, and the sealed windows stay in the buffer folder: the next writer of the topic uploads them, nothing is lost |
 | `RawdataException` with "is no longer the file that was opened" | a segment was replaced or removed by hand while it was read | do not change segment files; the provider never does |
 | `.*.tmp` files in a topic folder | a writer crashed between writing a file and linking or moving it | delete them; nothing reads them |
@@ -413,7 +413,7 @@ provider (so that the store contract can reach the package-private `FilesystemAv
 
 | Test | What it checks |
 |---|---|
-| [`FilesystemContractTest`](../../rawdata-client-provider-filesystem/src/test/java/io/descoped/rawdata/provider/filesystem/test/FilesystemContractTest.java) | the whole provider contract (`AvroClientContractTest`, which extends `RawdataClientContractTest`), with a metadata key limit of 127 bytes and a storage folder that cannot exist (one inside a regular file) |
+| [`FilesystemContractTest`](../../rawdata-client-provider-filesystem/src/test/java/io/descoped/rawdata/provider/filesystem/test/FilesystemContractTest.java) | the whole provider contract (`AvroClientContractTest`, which extends `RawdataClientContractTest`), with a storage folder that cannot exist (one inside a regular file) |
 | [`FilesystemStoreContractTest`](../../rawdata-client-provider-filesystem/src/test/java/io/descoped/rawdata/provider/filesystem/FilesystemStoreContractTest.java) | the `AvroStore` contract (`AvroStoreContractTest`), and that an opened segment is pinned to its file |
 | [`FilesystemProviderTest`](../../rawdata-client-provider-filesystem/src/test/java/io/descoped/rawdata/provider/filesystem/test/FilesystemProviderTest.java) | the files on disk: the layout, the Avro schema of a segment, metadata keys that are any string, the configuration checks, and recovery of sealed windows a crash left behind |
 

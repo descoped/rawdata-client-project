@@ -108,11 +108,6 @@ class MyStoreContractTest extends RawdataClientContractTest {
     }
 
     @Override
-    protected OptionalInt metadataKeyLimit(String topic) {
-        return OptionalInt.of(500); // the longest key your store takes, as your docs say
-    }
-
-    @Override
     protected Map<String, String> missingStoreConfiguration() {
         return Map.of(RawdataClient.PROVIDER_KEY, "mystore", "mystore.url", TestStore.url() + "/no-such-store");
     }
@@ -123,7 +118,6 @@ class MyStoreContractTest extends RawdataClientContractTest {
 |---|---|---|
 | `configuration()` | | required; every call must give a client on the same store |
 | `clientsShareTheStore()` | `true` | false only if each client has its own store (`memory`); the tests with a second client are then skipped |
-| `metadataKeyLimit(topic)` | none | the longest metadata key, in UTF-8 bytes; at least 127 |
 | `missingStoreConfiguration()` | null | a store that does not exist; the test checks it fails and never reads as empty |
 | `awaitPublished(client, topic)` | nothing | waits until what the client published to the topic is visible; a provider that buffers waits for its upload |
 

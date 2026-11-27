@@ -82,7 +82,7 @@ For a provider of your own:
    Avro engine).
 3. Implement `configuration()`: return the keys that create a client of your provider on a test store, including
    `rawdata.client.provider` (`RawdataClient.PROVIDER_KEY`).
-4. Override the other hooks your provider needs: its metadata key limit, a store that does not exist, and so on
+4. Override the other hooks your provider needs: a store that does not exist, and so on
    (see [Hooks](#hooks)).
 5. Run `./mvnw verify`. Every inherited test must pass, unchanged.
 
@@ -95,12 +95,6 @@ class PostgresContractTest extends RawdataClientContractTest {
     @Override
     protected Map<String, String> configuration() {
         return Postgres18.configuration();
-    }
-
-    // Below what a PostgreSQL btree index entry holds.
-    @Override
-    protected OptionalInt metadataKeyLimit(String topic) {
-        return OptionalInt.of(2000);
     }
 
     @Override
@@ -122,8 +116,8 @@ can swap one provider for another, or move its data with the [copy tool](rawdata
 code. A provider that needs a test changed is a provider that behaves differently, and the difference belongs in the
 contract (for every provider) or nowhere.
 
-The hooks are the only things a provider may supply. They describe the provider (how to configure it, which limits
-its store has); they never relax a behaviour.
+The hooks are the only things a provider may supply. They describe the provider (how to configure it, a store that
+does not exist); they never relax a behaviour.
 
 ### Behaviour tests and internal tests
 
@@ -164,28 +158,14 @@ every provider that keeps data outside the client. It is false only for `memory`
 and are gone when it closes. Where it is false, the three tests that need a second client on the same store are
 skipped with a JUnit assumption: a second writer, a writer that restarts, and a consumer in another client.
 
-### Declared limits
+### One set of limits
 
-Stores have different limits, and the TCK lets a provider declare them instead of failing on them. The only one
-today is the length of a metadata key:
-
-- `metadataKeyLimit(topic)` returns the longest key, in UTF-8 bytes, that the provider's documentation states. It
-  takes the topic because in some stores the limit depends on the topic's name (an object name in GCS or S3 holds
-  the prefix, the topic and the key).
-- Every provider must take at least `RawdataMetadataClient.PORTABLE_KEY_BYTES` (127 bytes). A key that short works
-  everywhere; the TCK fails a provider that declares less.
-- A provider with no limit returns `OptionalInt.empty()`, and the TCK checks that a 10,000-byte key works.
-
-What the providers in this repository declare:
-
-| Provider | `metadataKeyLimit` |
-|---|---|
-| `memory` | none |
-| `postgres` | 2000 |
-| `filesystem` | 127 (a file name is at most 255 characters: `k` and the key in hex) |
-| `gcs`, `s3` | `(1024 - bytes of prefix + topic + "/metadata/k") / 2` |
-
-The declared limit must also be in the provider's documentation, so applications can see it.
+The limits are the same in every provider, the smallest that every store holds, so a topic copies between any two
+providers: a position and a content key of at most 2000 bytes in UTF-8, a metadata key of at most 127. The API checks
+them, and the TCK checks in every provider that a value at the limit, which does not compress, is stored and read
+back, and that one byte longer is refused with `IllegalArgumentException` and writes nothing
+(`aPositionOrContentKeyOverTheLimitIsRefused`, `aMetadataKeyOverTheLimitIsRefused`). A provider declares no limits
+of its own: a store that cannot hold these does not pass.
 
 ### A store that does not exist
 
@@ -350,7 +330,6 @@ On `RawdataClientContractTest` (and so on `AvroClientContractTest`):
 |---|---|---|
 | `Map<String, String> configuration()` | none, abstract | a client of the provider on the test store, including `rawdata.client.provider`. Each call is another process: the same store, its own local state |
 | `boolean clientsShareTheStore()` | `true` | whether two clients from `configuration()` see the same data; false only when each client has its own store (`memory`), and the four tests with a second client are then skipped |
-| `OptionalInt metadataKeyLimit(String topic)` | `OptionalInt.empty()` (no limit) | the longest metadata key in UTF-8 bytes, as the provider documents it; at least 127 |
 | `Map<String, String> missingStoreConfiguration()` | `null` (test skipped) | a client on a store that does not exist |
 | `Map<String, String> crashingConfiguration()` | `configuration()` | the configuration of the process that crashes in the crash test; it must keep what it publishes until the crash. `AvroClientContractTest` sets `avro-file.max.seconds=3600`, so its timer never uploads during the test and recovery from disk is what is checked |
 | `Map<String, String> afterCrash(Map<String, String> crashed)` | `configuration()` | the configuration of the process restarted after a crash of the one configured with `crashed`, its client left unclosed; `AvroClientContractTest` gives a new `configuration()` with a copy of the topic's buffer folder (not its `.lock`), as a process restarted on the same disk finds it |
@@ -387,8 +366,8 @@ configuration](rawdata-client-provider-avro.md#configuration) and in
 | The four tests with a second client are skipped | `clientsShareTheStore()` returns false | return false only if each client really has its own store |
 | `aStoreThatDoesNotExistFails` is skipped | `missingStoreConfiguration()` returns null | give a store that cannot exist; if the provider creates missing folders, point it at a folder inside a regular file |
 | `aStoreThatDoesNotExistFails` fails on an assertion | a missing store reads as empty | throw `RawdataException` (or `IOException` from an `AvroStore`) when the database, bucket or folder is missing |
-| `aMetadataKeyOverTheProvidersLimitIsRefused` fails with "below the portable length" | the declared limit is under 127 bytes | the store must take keys of at least `PORTABLE_KEY_BYTES` |
-| It fails at the limit or one byte over | the declared limit is not the real one, or the provider does not refuse a longer key with `IllegalArgumentException` in `put`, `get` and `remove` | measure the real limit and check keys before they reach the store |
+| `aMetadataKeyOverTheLimitIsRefused` or `aPositionOrContentKeyOverTheLimitIsRefused` fails at the limit | the store cannot hold a value of the common limit | store it so that it can: the limits are the same for every provider |
+| It fails one byte over | the provider does not check with `RawdataMetadataClient.requireValidKey` or `RawdataLimits.requirePublishable` | call them before the store is used |
 | Many Avro tests fail with a `RawdataException` saying the folder is in use | `configuration()` returns the same `local-temp-folder` on every call | return a new folder per call |
 | A test waits about 30 seconds and fails on null | `avro-file.max.seconds` is the default 60, so only the timer would upload the window | set it to `1` in `configuration()` |
 | A test times out after 60 seconds | a `receive` that is never woken, or a close that waits forever | closing a consumer or the client must wake a waiting `receive` |
@@ -455,7 +434,7 @@ other providers. See [`memory` and `discard`](rawdata-client-api.md#the-memory-a
 
 | Type | Key members |
 |---|---|
-| [`RawdataClientContractTest`](../../rawdata-client-tck/src/main/java/io/descoped/rawdata/tck/RawdataClientContractTest.java) | `protected RawdataClient client`; `protected String topic`; `protected abstract Map<String, String> configuration()`; `protected boolean clientsShareTheStore()`; `protected OptionalInt metadataKeyLimit(String topic)`; `protected Map<String, String> missingStoreConfiguration()`; `protected void awaitPublished(RawdataClient client, String topic)`; `@BeforeEach protected void createClient()`; `@AfterEach protected void closeClient()` |
+| [`RawdataClientContractTest`](../../rawdata-client-tck/src/main/java/io/descoped/rawdata/tck/RawdataClientContractTest.java) | `protected RawdataClient client`; `protected String topic`; `protected abstract Map<String, String> configuration()`; `protected boolean clientsShareTheStore()`; `protected Map<String, String> missingStoreConfiguration()`; `protected void awaitPublished(RawdataClient client, String topic)`; `@BeforeEach protected void createClient()`; `@AfterEach protected void closeClient()` |
 | [`AvroClientContractTest`](../../rawdata-client-tck/src/main/java/io/descoped/rawdata/tck/avro/AvroClientContractTest.java) | `extends RawdataClientContractTest`; `protected void awaitPublished(RawdataClient client, String topic)`, which calls `((AvroRawdataClient) client).flush(topic)` |
 | [`AvroStoreContractTest`](../../rawdata-client-tck/src/main/java/io/descoped/rawdata/tck/avro/AvroStoreContractTest.java) | `protected AvroStore store`; `protected String topic`; `protected abstract AvroStore createStore() throws Exception`; `protected AvroStore createMissingStore() throws Exception`; `@BeforeEach protected void createTheStore() throws Exception`; `@AfterEach protected void closeTheStore() throws Exception` |
 | [`module-info.java`](../../rawdata-client-tck/src/main/java/module-info.java) | `open module io.descoped.rawdata.tck`; exports `io.descoped.rawdata.tck` and `io.descoped.rawdata.tck.avro` |
@@ -465,7 +444,7 @@ Types from other modules that the TCK relies on:
 | Type | Module | Used for |
 |---|---|---|
 | `RawdataClient.PROVIDER_KEY` (`rawdata.client.provider`) | API | choosing the provider in `configuration()` |
-| `RawdataMetadataClient.PORTABLE_KEY_BYTES` (127) | API | the lowest limit a provider may declare |
+| `RawdataMetadataClient.MAX_KEY_BYTES` (127), `RawdataMessage.MAX_POSITION_BYTES`, `MAX_CONTENT_KEY_BYTES` (2000) | API | the limits, the same in every provider |
 | `RawdataWriterConflictException.topic()` | API | the topic of a writer conflict |
 | `AvroRawdataClient.flush(String topic)` | Avro engine | `awaitPublished` for providers on the engine |
 | `AvroUploadWindow` key constants | Avro engine | the upload window tests |

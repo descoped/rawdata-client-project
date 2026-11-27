@@ -69,10 +69,7 @@ public abstract class OrderedRawdataProducer implements RawdataProducer {
 
     @Override
     public final void publish(RawdataMessage... messages) throws RawdataClosedException {
-        Objects.requireNonNull(messages, "messages");
-        for (RawdataMessage message : messages) {
-            Objects.requireNonNull(message, "one of the messages is null");
-        }
+        RawdataLimits.requirePublishable(messages);
         checkOpen();
         if (messages.length > 0) {
             write(messages.clone());

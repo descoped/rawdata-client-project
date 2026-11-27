@@ -11,6 +11,7 @@ import io.descoped.rawdata.api.RawdataNoSuchPositionException;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataTopics;
 import io.descoped.rawdata.api.spi.IdRange;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -47,7 +48,7 @@ final class DiscardingRawdataClient implements RawdataClient {
 
             @Override
             public void publish(RawdataMessage... messages) {
-                Objects.requireNonNull(messages, "messages");
+                RawdataLimits.requirePublishable(messages); // refused as in every provider, though nothing is kept
                 if (isClosed()) {
                     throw new RawdataClosedException("producer of topic " + name + " is closed");
                 }

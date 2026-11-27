@@ -318,12 +318,9 @@ Numbers are strict: `60`, not `60s`. A default covers a missing key, never a mal
 
 ### Limits
 
-- **Object keys** are at most 1024 bytes in S3. A metadata entry's object key is
-  `<prefix><topic>/metadata/k` plus twice the key's UTF-8 length, so a metadata key may be at most
-  (1024 − bytes of `<prefix><topic>/metadata/k`) / 2 bytes: 506 with no prefix and a one-letter topic, 456 with no
-  prefix and a 100-character topic. A longer key is refused with `IllegalArgumentException`.
-- **The prefix** is at most 659 bytes, so that a metadata key of 127 bytes (`RawdataMetadataClient.PORTABLE_KEY_BYTES`,
-  the length every provider accepts) always fits, even with a 100-character topic.
+- **Object keys** are at most 1024 bytes in S3. A metadata entry's object key is `<prefix><topic>/metadata/k` plus
+  twice the key's UTF-8 length. **The prefix** is at most 659 bytes, so that a metadata key of 127 bytes
+  (`RawdataMetadataClient.MAX_KEY_BYTES`, the limit in every provider) always fits, even with a 100-character topic.
 - **Memory**: each running upload holds its window in memory, so uploads can take up to
   `avro-file.upload.max-concurrency` × `avro-file.max.bytes` of heap, 1 GiB at the defaults.
 
@@ -367,7 +364,7 @@ configuration.put("s3.sse-kms-key-id", "alias/rawdata");
 | a `RawdataException` on publish, flush or close after uploads failed | S3 failed a segment put after six attempts (or ten 409s) | fix the cause and start a new client: the sealed windows stay on disk and its writer uploads them |
 | a read fails with "is no longer the object that was opened" | a segment object was replaced or deleted by hand | do not change segment objects; the engine never does |
 | messages are not visible right after `publish` | they become visible when their window is uploaded | close the producer, wait up to `avro-file.max.seconds`, or lower it |
-| `IllegalArgumentException` on a metadata key | the key is too long for a 1024-byte object key | use a shorter key or prefix |
+| `IllegalArgumentException` on a metadata key | the key is over 127 bytes, the limit in every provider | use a shorter key |
 | uploads slow down under load | S3 throttles (503 `SlowDown`) and the engine lowers its concurrency | expected; spread topics or raise S3's capacity for the prefix |
 
 A failed S3 call reaches the application as a `RawdataException` (unchecked) whose cause is the store's
@@ -382,7 +379,7 @@ packages); the JPMS smoke test (`src/it/jpms/run.sh`) covers the module path aga
 
 | Test | What it checks |
 |---|---|
-| `S3ContractTest` | the provider contract (`RawdataClientContractTest`, through `AvroClientContractTest`) against [S3Mock](https://github.com/adobe/S3Mock) (`adobe/s3mock`) in Docker, with the metadata key limit declared to the TCK |
+| `S3ContractTest` | the provider contract (`RawdataClientContractTest`, through `AvroClientContractTest`) against [S3Mock](https://github.com/adobe/S3Mock) (`adobe/s3mock`) in Docker |
 | `S3StoreContractTest` | the Avro store contract (`AvroStoreContractTest`) for `S3AvroStore`, including a missing bucket |
 | `S3ProviderTest` | the object layout and content types, `AES256` on every put, configuration checks, every credential kind |
 | `S3AvroStoreTest` | failures as `IOException` (`NoSuchBucket`, unreachable endpoint), the KMS key on the put, 409 retries (a stub, as S3Mock never answers 409), ETag pinning, the size and CRC32C check before a download, throttling reports |

@@ -1,6 +1,8 @@
 package io.descoped.rawdata.provider.postgres.test;
 
 import io.descoped.rawdata.api.RawdataClient;
+import io.descoped.rawdata.api.RawdataClosedException;
+import io.descoped.rawdata.api.RawdataConsumer;
 import io.descoped.rawdata.api.RawdataException;
 import io.descoped.rawdata.api.RawdataIds;
 import io.descoped.rawdata.api.RawdataMessage;
@@ -11,12 +13,17 @@ import org.junit.jupiter.api.Timeout;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -24,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -113,7 +121,7 @@ class PostgresProviderTest {
             }
             CompletableFuture<Void> publish = CompletableFuture.runAsync(
                     () -> producer.publish(RawdataMessage.builder().position("after-holder").build()));
-            Thread.sleep(300);
+            awaitTopicLockWaiter();
             assertFalse(publish.isDone(), "the publish waits for the topic lock");
             holder.commit();
             publish.get(30, TimeUnit.SECONDS);
@@ -131,6 +139,162 @@ class PostgresProviderTest {
     private static final int TOPIC_LOCK = 0x52445044;
 
     /**
+     * Waits until a session of the provider waits for a topic lock, as {@code pg_locks} shows it.
+     */
+    private static void awaitTopicLockWaiter() throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (count("SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid"
+                + " WHERE l.locktype = 'advisory' AND l.classid = " + TOPIC_LOCK + " AND NOT l.granted"
+                + " AND a.application_name = 'rawdata-postgres'") == 0) {
+            assertTrue(System.nanoTime() < deadline, "no publish waits for the topic lock");
+        }
+    }
+
+    private static long count(String sql) throws Exception {
+        try (Connection connection = Postgres18.connect(); Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery(sql)) {
+            rows.next();
+            return rows.getLong(1);
+        }
+    }
+
+    /**
+     * Holds a topic's lock on a connection of its own, as another process's publish would.
+     */
+    private static Connection holdTopicLock(String topic) throws Exception {
+        Connection holder = Postgres18.connect();
+        holder.setAutoCommit(false);
+        try (PreparedStatement lock = holder.prepareStatement("SELECT pg_advisory_xact_lock(?, hashtext(?))")) {
+            lock.setInt(1, TOPIC_LOCK);
+            lock.setString(2, topic);
+            lock.execute();
+        }
+        return holder;
+    }
+
+    /**
+     * A publish waiting for its turn behind another producer of the client writes nothing when its producer closes
+     * meanwhile, and throws RawdataClosedException.
+     */
+    @Test
+    void aPublishThatWaitedForItsTurnWritesNothingOnceItsProducerClosed() throws Exception {
+        String topic = topic();
+        try (RawdataClient client = client(); RawdataProducer first = client.producer(topic);
+             Connection holder = holdTopicLock(topic)) {
+            RawdataProducer second = client.producer(topic); // closed by the test, while its publish waits
+            CompletableFuture<Void> waitsInTheDatabase = CompletableFuture.runAsync(
+                    () -> first.publish(RawdataMessage.builder().position("first").build()));
+            awaitTopicLockWaiter(); // the first publish has the client's turn and waits for the topic lock
+            CompletableFuture<Void> secondPublish = new CompletableFuture<>();
+            Thread waitsForItsTurn = new Thread(() -> {
+                try {
+                    second.publish(RawdataMessage.builder().position("second").build());
+                    secondPublish.complete(null);
+                } catch (RuntimeException e) {
+                    secondPublish.completeExceptionally(e);
+                }
+            });
+            waitsForItsTurn.start();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+            while (waitsForItsTurn.getState() != Thread.State.WAITING) { // parked on the client's turn
+                assertTrue(System.nanoTime() < deadline, "the second publish does not wait for its turn");
+                Thread.onSpinWait();
+            }
+            second.close();
+            holder.commit();
+            waitsInTheDatabase.get(30, TimeUnit.SECONDS);
+            ExecutionException failed = assertThrows(ExecutionException.class, () -> secondPublish.get(30, TimeUnit.SECONDS));
+            assertInstanceOf(RawdataClosedException.class, failed.getCause());
+            assertEquals("first", client.lastMessage(topic).position(), "the closed producer wrote nothing");
+        }
+    }
+
+    /**
+     * Closing the client while a publish waits in the database aborts it: the publish throws RawdataClosedException,
+     * with the database's failure as the cause, and writes nothing.
+     */
+    @Test
+    void closingTheClientDuringAPublishReportsItClosed() throws Exception {
+        String topic = topic();
+        RawdataClient client = client();
+        try (Connection holder = holdTopicLock(topic)) {
+            RawdataProducer producer = client.producer(topic);
+            CompletableFuture<Void> publish = CompletableFuture.runAsync(
+                    () -> producer.publish(RawdataMessage.builder().position("aborted").build()));
+            awaitTopicLockWaiter();
+            client.close();
+            ExecutionException failed = assertThrows(ExecutionException.class, () -> publish.get(30, TimeUnit.SECONDS));
+            RawdataClosedException closed = assertInstanceOf(RawdataClosedException.class, failed.getCause());
+            assertInstanceOf(SQLException.class, closed.getCause());
+            holder.commit();
+        } finally {
+            client.close();
+        }
+        assertEquals(0, count("SELECT count(*) FROM rawdata_message WHERE topic = '" + topic + "'"));
+    }
+
+    /**
+     * A database failure names the operation, the topic and the SQLState, and keeps the SQL exception as the cause.
+     */
+    @Test
+    void aDatabaseFailureNamesTheOperationAndTheSqlState() throws Exception {
+        client().close(); // the tables exist
+        execute("DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rdc_noread') THEN "
+                + "CREATE ROLE rdc_noread LOGIN PASSWORD 'noread'; END IF; END $$");
+        execute("GRANT USAGE ON SCHEMA public TO rdc_noread");
+        Map<String, String> configuration = new HashMap<>(Postgres18.configuration());
+        configuration.put("postgres.driver.user", "rdc_noread");
+        configuration.put("postgres.driver.password", "noread");
+        String topic = topic();
+        try (RawdataClient client = RawdataClient.create(configuration)) {
+            RawdataException failed = assertThrows(RawdataException.class, () -> client.lastMessage(topic));
+            assertTrue(failed.getMessage().contains("read the last message of topic " + topic), failed.getMessage());
+            assertTrue(failed.getMessage().contains("SQLState 42501"), failed.getMessage());
+            assertInstanceOf(SQLException.class, failed.getCause());
+        }
+    }
+
+    /**
+     * A publish wakes the client's waiting consumers of the topic, which read at once instead of at the next poll (an
+     * hour here); with {@code rawdata.postgres.consumer.wake-on-publish} false, they read again only at their
+     * deadline. (The lower bound of that wait fails only on a spurious wake-up of {@code Object.wait}.)
+     */
+    @Test
+    void aPublishWakesTheClientsWaitingConsumersUnlessConfiguredOff() throws Exception {
+        for (boolean wake : new boolean[]{true, false}) {
+            Map<String, String> configuration = new HashMap<>(Postgres18.configuration());
+            configuration.put("rawdata.postgres.consumer.prefetch-poll-interval-when-empty", String.valueOf(TimeUnit.HOURS.toMillis(1)));
+            configuration.put("rawdata.postgres.consumer.wake-on-publish", String.valueOf(wake));
+            String topic = topic();
+            try (RawdataClient client = RawdataClient.create(configuration); RawdataProducer producer = client.producer(topic);
+                 RawdataConsumer consumer = client.consumer(topic)) {
+                CompletableFuture<RawdataMessage> received = new CompletableFuture<>();
+                Thread receiver = new Thread(() -> {
+                    try {
+                        received.complete(consumer.receive(wake ? 30 : 3, TimeUnit.SECONDS));
+                    } catch (Exception e) {
+                        received.completeExceptionally(e);
+                    }
+                });
+                receiver.start();
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                while (receiver.getState() != Thread.State.TIMED_WAITING) { // the receive found nothing and waits
+                    assertTrue(System.nanoTime() < deadline, "the receive does not wait");
+                    Thread.onSpinWait();
+                }
+                long published = System.nanoTime();
+                producer.publish(RawdataMessage.builder().position("woken").build());
+                RawdataMessage message = received.get(60, TimeUnit.SECONDS);
+                assertEquals("woken", message.position());
+                if (!wake) { // the receive reads again only at its own deadline, 3 s after it began to wait
+                    long waited = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - published);
+                    assertTrue(waited >= 1000, "without the wake-up, the receive waits for its deadline: " + waited + " ms");
+                }
+            }
+        }
+    }
+
+    /**
      * A role that may only read and write the tables can use them once another role has created them.
      */
     @Test
@@ -141,7 +305,7 @@ class PostgresProviderTest {
         execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC");
         execute("GRANT USAGE ON SCHEMA public TO rdc_app");
         execute("GRANT SELECT, INSERT, UPDATE, DELETE ON rawdata_message, rawdata_content, rawdata_metadata TO rdc_app");
-        Map<String, String> configuration = new java.util.HashMap<>(Postgres18.configuration());
+        Map<String, String> configuration = new HashMap<>(Postgres18.configuration());
         configuration.put("postgres.driver.user", "rdc_app");
         configuration.put("postgres.driver.password", "app");
         String topic = topic();
@@ -243,7 +407,7 @@ class PostgresProviderTest {
 
     @Test
     void missingConfigurationIsReported() {
-        Map<String, String> configuration = new java.util.HashMap<>(Postgres18.configuration());
+        Map<String, String> configuration = new HashMap<>(Postgres18.configuration());
         configuration.remove("postgres.driver.user");
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(configuration));
         assertTrue(e.getMessage().contains("postgres.driver.user"));
@@ -254,24 +418,32 @@ class PostgresProviderTest {
 
     @Test
     void closingTheClientClosesItsPool() throws Exception {
-        long before = backends();
+        Set<Long> before = backends();
         RawdataClient client = client();
         client.lastMessage(topic());
-        assertTrue(backends() > before, "the client holds connections");
+        Set<Long> own = backends();
+        own.removeAll(before); // this client's connections, whatever other clients do meanwhile
+        assertFalse(own.isEmpty(), "the client holds connections");
         client.close();
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (backends() > before && System.nanoTime() < deadline) {
-            Thread.onSpinWait();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        Set<Long> left = backends();
+        left.retainAll(own);
+        while (!left.isEmpty()) {
+            assertTrue(System.nanoTime() < deadline, "closing the client closes its connections: " + left);
+            left = backends();
+            left.retainAll(own);
         }
-        assertEquals(before, backends(), "closing the client closes its connections");
         assertTrue(client.isClosed());
     }
 
-    private static long backends() throws Exception {
+    private static Set<Long> backends() throws Exception {
+        Set<Long> pids = new HashSet<>();
         try (Connection connection = Postgres18.connect(); Statement statement = connection.createStatement();
-             ResultSet rows = statement.executeQuery("SELECT count(*) FROM pg_stat_activity WHERE application_name = 'rawdata-postgres'")) {
-            rows.next();
-            return rows.getLong(1);
+             ResultSet rows = statement.executeQuery("SELECT pid FROM pg_stat_activity WHERE application_name = 'rawdata-postgres'")) {
+            while (rows.next()) {
+                pids.add(rows.getLong(1));
+            }
         }
+        return pids;
     }
 }

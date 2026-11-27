@@ -4,9 +4,7 @@ import io.descoped.rawdata.tck.avro.AvroClientContractTest;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
-import java.util.OptionalInt;
 import java.util.UUID;
 
 /**
@@ -18,11 +16,6 @@ class S3LiveContractTest extends AvroClientContractTest {
     @Override
     protected Map<String, String> configuration() {
         return LiveS3.configuration("contract/");
-    }
-
-    @Override
-    protected OptionalInt metadataKeyLimit(String topic) {
-        return OptionalInt.of((1024 - (LiveS3.RUN + "contract/" + topic + "/metadata/k").getBytes(StandardCharsets.UTF_8).length) / 2);
     }
 
     /**

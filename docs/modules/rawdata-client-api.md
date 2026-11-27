@@ -269,9 +269,11 @@ of a shared store. A typical entry is a consumer's checkpoint, the id of the las
 | `put(key, value)` | writes, replacing any value; returns the metadata client |
 | `remove(key)` | removes; does nothing for a missing key; returns the metadata client |
 
-A key is any string without NUL, the empty string included, and case matters. How long a key may be depends on the
-store, but every provider takes at least `RawdataMetadataClient.PORTABLE_KEY_BYTES` (127) bytes of UTF-8. Keep keys
-within that and they work everywhere. The per-provider limits are in the [contract](../contract.md#metadata).
+A key is any string without NUL, the empty string included, and case matters, of at most
+`RawdataMetadataClient.MAX_KEY_BYTES` (127) bytes of UTF-8 in every provider; a longer one is refused with
+`IllegalArgumentException`. A position and a content key are at most `RawdataMessage.MAX_POSITION_BYTES` and
+`MAX_CONTENT_KEY_BYTES` (2000) bytes, checked when a message is published, in every provider. See the
+[contract](../contract.md).
 
 ### Closed state
 
@@ -411,7 +413,7 @@ RawdataClient client = RawdataClient.create(Map.of(RawdataClient.PROVIDER_KEY, "
   producers of one client stay in one order.
 - A receive waits on the topic and wakes on the next publish; there is no poll interval.
 - Asynchronous publishes and receives run on daemon threads named `rawdata-memory-<n>`, shut down at `close`.
-- No limit on metadata key length; `keys()` returns a snapshot in no particular order.
+- `keys()` returns a snapshot in no particular order.
 - It keeps the whole contract except the parts that need a second client on the same store (the TCK runs it with
   `clientsShareTheStore()` false). It never throws `RawdataWriterConflictException`. So code tested against `memory`
   holds for the other providers, except for what involves another process.
@@ -450,7 +452,7 @@ module pages.
 
 | Exception | Thrown when |
 |---|---|
-| `IllegalArgumentException` | an invalid topic name; a given id that is not a UUIDv7; a NUL in a position, ordering group, content key or metadata key; a metadata key longer than the store takes; a cursor from another provider; `maxMessages` below 1 or a negative timeout; a missing `rawdata.client.provider` or a missing required provider key |
+| `IllegalArgumentException` | an invalid topic name; a given id that is not a UUIDv7; a NUL in a position, ordering group, content key or metadata key; a position or content key over 2000 bytes, or a metadata key over 127, in UTF-8; a cursor from another provider; `maxMessages` below 1 or a negative timeout; a missing `rawdata.client.provider` or a missing required provider key |
 | `NullPointerException` | a null topic, key, value, payload, message or configuration map |
 | `RawdataException` | the base of the failures below; also a store that does not exist or fails |
 | `RawdataClosedException` | any use of a client, producer, consumer or metadata client after it, or its client, was closed |
@@ -644,8 +646,8 @@ refuse another provider's cursor with `IllegalArgumentException`.
 
 | Member | |
 |---|---|
-| `int PORTABLE_KEY_BYTES = 127` | the key length in UTF-8 bytes every provider takes |
-| `static String requireValidKey(String key)` | not null, no NUL |
+| `int MAX_KEY_BYTES = 127` | the longest key in UTF-8 bytes, in every provider |
+| `static String requireValidKey(String key)` | not null, no NUL, at most `MAX_KEY_BYTES` |
 | `String topic()` | |
 | `Set<String> keys()` | snapshot |
 | `byte[] get(String key)` | copy or null |
@@ -763,7 +765,7 @@ See [writing a provider](../writing-a-provider.md) for how to use them.
 
 - [Concepts](../concepts.md): the ideas of the rawdata client across all modules.
 - [Tutorial](../tutorial.md): from a first message to a resumable consumer.
-- [The contract](../contract.md): what every provider guarantees, and the per-provider limits.
+- [The contract](../contract.md): what every provider guarantees, and the limits.
 - [rawdata-client-tck](rawdata-client-tck.md): the contract tests.
 - Providers: [postgres](rawdata-client-provider-postgres.md), [filesystem](rawdata-client-provider-filesystem.md),
   [gcs](rawdata-client-provider-gcs.md), [s3](rawdata-client-provider-s3.md), and the engine they share,

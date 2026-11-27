@@ -45,6 +45,8 @@ class DiscardProviderTest {
         try (RawdataProducer producer = client.producer("the-topic")) {
             producer.publish(RawdataMessage.builder().position("p1").put("k", new byte[1]).build());
             producer.publishAsync(RawdataMessage.builder().position("p2").build()).get(5, TimeUnit.SECONDS);
+            RawdataMessage tooLong = RawdataMessage.builder().position("p".repeat(RawdataMessage.MAX_POSITION_BYTES + 1)).build();
+            assertThrows(IllegalArgumentException.class, () -> producer.publish(tooLong), "refused as in every provider");
             assertEquals("the-topic", producer.topic());
         }
         assertNull(client.lastMessage("the-topic"));

@@ -17,7 +17,6 @@ import software.amazon.awssdk.services.s3.model.ServerSideEncryption;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.Set;
@@ -47,7 +46,6 @@ import java.util.function.Supplier;
  */
 final class S3AvroStore implements AvroStore {
 
-    private static final int MAX_KEY_BYTES = 1024;
     private static final int NOT_FOUND = 404;
     private static final int CONFLICT = 409;
     private static final int PRECONDITION_FAILED = 412;
@@ -309,12 +307,7 @@ final class S3AvroStore implements AvroStore {
     }
 
     private String metadata(String topic, String name) {
-        String key = prefix + topic + "/metadata/" + name;
-        if (key.getBytes(StandardCharsets.UTF_8).length > MAX_KEY_BYTES) {
-            throw new IllegalArgumentException("The metadata key is too long for an object key in S3, at most "
-                    + MAX_KEY_BYTES + " bytes in UTF-8 with the prefix and topic: " + key);
-        }
-        return key;
+        return prefix + topic + "/metadata/" + name; // fits in 1024 bytes: the API's key limit and the prefix limit
     }
 
     @Override

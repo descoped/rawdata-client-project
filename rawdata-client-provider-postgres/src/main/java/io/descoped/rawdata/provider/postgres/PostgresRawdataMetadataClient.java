@@ -2,7 +2,6 @@ package io.descoped.rawdata.provider.postgres;
 
 import io.descoped.rawdata.api.RawdataMetadataClient;
 
-import java.nio.charset.StandardCharsets;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.Collections;
@@ -11,12 +10,10 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * A topic's metadata as rows of {@code rawdata_metadata}. A key is at most {@value #MAX_KEY_BYTES} bytes in UTF-8,
- * below what a PostgreSQL btree index entry holds, so a longer key is refused before the database sees it.
+ * A topic's metadata as rows of {@code rawdata_metadata}. A key is at most
+ * {@link RawdataMetadataClient#MAX_KEY_BYTES} bytes, as in every provider, well below what a btree index entry holds.
  */
 final class PostgresRawdataMetadataClient implements RawdataMetadataClient {
-
-    static final int MAX_KEY_BYTES = 2000;
 
     private final PostgresRawdataClient client;
     private final String topic;
@@ -24,14 +21,6 @@ final class PostgresRawdataMetadataClient implements RawdataMetadataClient {
     PostgresRawdataMetadataClient(PostgresRawdataClient client, String topic) {
         this.client = client;
         this.topic = topic;
-    }
-
-    private static void requireValidKey(String key) {
-        RawdataMetadataClient.requireValidKey(key);
-        int bytes = key.getBytes(StandardCharsets.UTF_8).length;
-        if (bytes > MAX_KEY_BYTES) {
-            throw new IllegalArgumentException("A metadata key is at most " + MAX_KEY_BYTES + " bytes in UTF-8 in postgres: " + bytes);
-        }
     }
 
     @Override
@@ -42,7 +31,7 @@ final class PostgresRawdataMetadataClient implements RawdataMetadataClient {
     @Override
     public Set<String> keys() {
         client.checkOpen();
-        return client.jdbc().transaction(connection -> {
+        return client.jdbc().transaction("read the metadata keys of topic " + topic, connection -> {
             try (PreparedStatement select = connection.prepareStatement("SELECT name FROM rawdata_metadata WHERE topic = ? ORDER BY name")) {
                 select.setString(1, topic);
                 Set<String> keys = new LinkedHashSet<>();
@@ -58,9 +47,9 @@ final class PostgresRawdataMetadataClient implements RawdataMetadataClient {
 
     @Override
     public byte[] get(String key) {
-        requireValidKey(key);
+        RawdataMetadataClient.requireValidKey(key);
         client.checkOpen();
-        return client.jdbc().transaction(connection -> {
+        return client.jdbc().transaction("read metadata of topic " + topic, connection -> {
             try (PreparedStatement select = connection.prepareStatement("SELECT data FROM rawdata_metadata WHERE topic = ? AND name = ?")) {
                 select.setString(1, topic);
                 select.setString(2, key);
@@ -73,11 +62,11 @@ final class PostgresRawdataMetadataClient implements RawdataMetadataClient {
 
     @Override
     public RawdataMetadataClient put(String key, byte[] value) {
-        requireValidKey(key);
+        RawdataMetadataClient.requireValidKey(key);
         Objects.requireNonNull(value, "value");
         client.checkOpen();
         byte[] copy = value.clone();
-        client.jdbc().transaction(connection -> {
+        client.jdbc().transaction("write metadata of topic " + topic, connection -> {
             try (PreparedStatement upsert = connection.prepareStatement(
                     "INSERT INTO rawdata_metadata (topic, name, data) VALUES (?, ?, ?) ON CONFLICT (topic, name) DO UPDATE SET data = EXCLUDED.data")) {
                 upsert.setString(1, topic);
@@ -92,9 +81,9 @@ final class PostgresRawdataMetadataClient implements RawdataMetadataClient {
 
     @Override
     public RawdataMetadataClient remove(String key) {
-        requireValidKey(key);
+        RawdataMetadataClient.requireValidKey(key);
         client.checkOpen();
-        client.jdbc().transaction(connection -> {
+        client.jdbc().transaction("remove metadata of topic " + topic, connection -> {
             try (PreparedStatement delete = connection.prepareStatement("DELETE FROM rawdata_metadata WHERE topic = ? AND name = ?")) {
                 delete.setString(1, topic);
                 delete.setString(2, key);

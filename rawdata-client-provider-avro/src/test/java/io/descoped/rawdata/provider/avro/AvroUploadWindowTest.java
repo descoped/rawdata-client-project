@@ -23,11 +23,13 @@ class AvroUploadWindowTest {
     @Test
     void maxBytesIsAtMostOneGibibyte() {
         assertEquals(1L << 30, AvroUploadWindow.of(withMaxBytes("1073741824")).maxBytes());
-        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
-                () -> AvroUploadWindow.of(withMaxBytes("1073741825")));
+        Map<String, String> oneMore = withMaxBytes("1073741825");
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () -> AvroUploadWindow.of(oneMore));
         assertTrue(refused.getMessage().contains(AvroUploadWindow.MAX_BYTES), refused.getMessage());
-        assertThrows(IllegalArgumentException.class, () -> AvroUploadWindow.of(withMaxBytes("2147483648")));
-        assertThrows(IllegalArgumentException.class, () -> AvroUploadWindow.of(withMaxBytes("0")));
+        Map<String, String> twoGibibytes = withMaxBytes("2147483648");
+        assertThrows(IllegalArgumentException.class, () -> AvroUploadWindow.of(twoGibibytes));
+        Map<String, String> zero = withMaxBytes("0");
+        assertThrows(IllegalArgumentException.class, () -> AvroUploadWindow.of(zero));
     }
 
     /**

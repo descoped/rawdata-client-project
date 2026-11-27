@@ -77,8 +77,8 @@ public record AvroUploadWindow(Path localTempFolder, long maxSeconds, long maxBy
         positive(MAX_SECONDS, maxSeconds);
         positive(MAX_BYTES, maxBytes);
         if (maxBytes > MAX_BYTES_LIMIT) {
-            throw new IllegalArgumentException("Configuration '" + MAX_BYTES + "' must be at most " + MAX_BYTES_LIMIT
-                    + " (1 GiB): " + maxBytes);
+            throw new IllegalArgumentException("Configuration '" + MAX_BYTES + "' must be at most " + MAX_BYTES_LIMIT + ": "
+                    + maxBytes);
         }
         positive(SYNC_INTERVAL, syncInterval);
         positive(MAX_PENDING_UPLOADS, maxPendingUploads);

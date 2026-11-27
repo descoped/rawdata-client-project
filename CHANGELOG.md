@@ -80,7 +80,8 @@
   - `rawdata.postgres.publish.lock-timeout-ms`: a publish that waits longer for the topic lock fails (SQLState
     `55P03`) and writes nothing;
   - `postgres.driver.tcp-keep-alive`;
-  - `postgres.driver.ssl-mode` and `postgres.driver.ssl-root-cert`, passed to pgjdbc's `sslmode` and `sslrootcert`.
+  - `postgres.driver.ssl-mode` (any case) and `postgres.driver.ssl-root-cert`, passed to pgjdbc's `sslmode` and
+    `sslrootcert`; a root certificate is refused unless the mode is `verify-ca` or `verify-full`, where it is used.
 - The POM names the organisation, Descoped (https://descoped.io).
 
 ## 3.1.0

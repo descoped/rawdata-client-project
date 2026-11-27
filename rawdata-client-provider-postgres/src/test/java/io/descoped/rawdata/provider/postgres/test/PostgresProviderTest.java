@@ -257,8 +257,9 @@ class PostgresProviderTest {
     }
 
     /**
-     * The TLS mode reaches the driver: {@code require} fails against the test server, which has no TLS, and a mode
-     * pgjdbc does not know is refused before connecting. TCP keep-alive is taken.
+     * The TLS mode reaches the driver: {@code require}, in any case, fails against the test server, which has no TLS;
+     * a mode pgjdbc does not know, and a root certificate without a verifying mode, are refused before connecting.
+     * TCP keep-alive is taken.
      */
     @Test
     void theTlsModeAndKeepAliveReachTheDriver() {
@@ -275,6 +276,13 @@ class PostgresProviderTest {
         try (RawdataClient client = RawdataClient.create(plain)) {
             assertNull(client.lastMessage(topic()));
         }
+        Map<String, String> upperCase = new HashMap<>(Postgres18.configuration());
+        upperCase.put("postgres.driver.ssl-mode", "REQUIRE");
+        assertThrows(RawdataException.class, () -> RawdataClient.create(upperCase), "a mode in any case reaches the driver");
+        Map<String, String> unverifiedRoot = new HashMap<>(Postgres18.configuration());
+        unverifiedRoot.put("postgres.driver.ssl-root-cert", "/etc/ssl/root.crt");
+        unverifiedRoot.put("postgres.driver.ssl-mode", "require");
+        assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(unverifiedRoot), "a root certificate would be ignored");
         Map<String, String> notABoolean = new HashMap<>(Postgres18.configuration());
         notABoolean.put("postgres.driver.tcp-keep-alive", "yes");
         assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(notABoolean));

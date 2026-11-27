@@ -343,10 +343,10 @@ Pass these keys in the map given to `RawdataClient.create`. The whole map goes t
 | `rawdata.postgres.consumer.prefetch-size` | `100` | most messages a consumer reads per query; a positive whole number |
 | `rawdata.postgres.consumer.prefetch-poll-interval-when-empty` | `250` | milliseconds a consumer that found nothing waits before it queries again; a positive whole number |
 | `rawdata.postgres.consumer.wake-on-publish` | `true` | whether a publish wakes the same client's waiting consumers of the topic, which then query at once; `true` or `false` |
-| `rawdata.postgres.publish.lock-timeout-ms` | none | milliseconds a publish waits for the topic lock before it fails with `RawdataException` (SQLState `55P03`), writing nothing; a positive whole number. Without it, a publish waits as long as the lock is held |
+| `rawdata.postgres.publish.lock-timeout-ms` | none | milliseconds a publish waits for the topic lock, or any other lock it needs (an operator's `ALTER TABLE`, say), before it fails with `RawdataException` (SQLState `55P03`), writing nothing; a positive whole number. Without it, a publish waits as long as the lock is held |
 | `postgres.driver.tcp-keep-alive` | `false` | TCP keep-alive on the connections, so the operating system notices a server or network that vanished; `true` or `false` |
-| `postgres.driver.ssl-mode` | pgjdbc's, `prefer` | `disable`, `allow`, `prefer`, `require`, `verify-ca` or `verify-full`, as pgjdbc's `sslmode`. Only `verify-ca` and `verify-full` check the server's certificate |
-| `postgres.driver.ssl-root-cert` | pgjdbc's | the file of certificates that sign the server's, for `verify-ca` and `verify-full`, as pgjdbc's `sslrootcert` |
+| `postgres.driver.ssl-mode` | pgjdbc's, `prefer` | `disable`, `allow`, `prefer`, `require`, `verify-ca` or `verify-full`, any case, as pgjdbc's `sslmode`. Only `verify-ca` and `verify-full` check the server's certificate |
+| `postgres.driver.ssl-root-cert` | pgjdbc's | the file of certificates that sign the server's, as pgjdbc's `sslrootcert`; only with `ssl-mode` `verify-ca` or `verify-full`, and refused with any other mode, where it would be ignored |
 
 Fixed settings, not configurable: auto-commit off, READ COMMITTED, `ApplicationName=rawdata-postgres`, pool name
 `rawdata-postgres`, and HikariCP's defaults for everything else (for example, a caller waits at most 30 seconds for
@@ -445,6 +445,10 @@ to the original exception as suppressed, never in its place.
 | `IllegalArgumentException`: "at most 127 bytes in UTF-8" from a metadata call, or "at most 2000 bytes" from a publish | a metadata key, a position or a content key is over the limit of every provider | use a shorter one |
 | `RawdataException` after about 30 seconds, mentioning a connection timeout | all `max-pool-size` connections were busy | raise `max-pool-size`, or use fewer concurrent consumers per client |
 | A consumer sees new messages late | it polls every `prefetch-poll-interval-when-empty` ms | lower the interval |
+| `RawdataException: PostgreSQL failed to publish to topic … (SQLState 55P03)` | another holder kept the topic lock, or a lock the publish needs, longer than `lock-timeout-ms` | nothing was written: retry; if it persists, find the holder in `pg_locks` (often another process writing the topic) |
+| `IllegalArgumentException: Configuration 'postgres.driver.ssl-mode' must be one of …` | an unknown TLS mode | use one of the six modes |
+| `IllegalArgumentException: Configuration 'postgres.driver.ssl-root-cert' needs …` | a root certificate without `verify-ca` or `verify-full` | set `ssl-mode` to `verify-full` (or `verify-ca`) |
+| `RawdataException: PostgreSQL: …` mentioning SSL from `create` | TLS is required but the server does not offer it, or the server's certificate failed the check | enable TLS on the server, or check `ssl-root-cert` and the host name |
 
 **`RawdataWriterConflictException`.** Two processes write the topic: two instances of a service, or an old instance
 still running after a restart. Stop one. The client that got the exception keeps failing for that topic; create a new

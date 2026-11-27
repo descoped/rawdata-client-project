@@ -30,13 +30,14 @@ import java.util.TreeSet;
  *     <tr><td>{@code rawdata.postgres.consumer.wake-on-publish}</td><td>{@code true}: a publish wakes the client's
  *     waiting consumers of the topic, which read at once instead of at the next poll</td></tr>
  *     <tr><td>{@code rawdata.postgres.publish.lock-timeout-ms}</td><td>none: how long a publish waits for the topic's
- *     lock before it fails, writing nothing; without it, it waits as long as the holder does</td></tr>
+ *     lock, or any other lock it needs, before it fails, writing nothing; without it, it waits as long as the holder
+ *     does</td></tr>
  *     <tr><td>{@code postgres.driver.tcp-keep-alive}</td><td>{@code false}: TCP keep-alive on the connections, so a
  *     server that vanished is noticed by the operating system</td></tr>
  *     <tr><td>{@code postgres.driver.ssl-mode}</td><td>pgjdbc's default, {@code prefer}: {@code disable},
  *     {@code allow}, {@code prefer}, {@code require}, {@code verify-ca} or {@code verify-full}</td></tr>
- *     <tr><td>{@code postgres.driver.ssl-root-cert}</td><td>none: a file of the certificates that sign the server's,
- *     for {@code verify-ca} and {@code verify-full}</td></tr>
+ *     <tr><td>{@code postgres.driver.ssl-root-cert}</td><td>none: a file of the certificates that sign the server's;
+ *     only with {@code verify-ca} or {@code verify-full}, refused with any other mode</td></tr>
  * </table>
  * The tables are created in the user's default schema when they are missing; a role that may not create tables can
  * use tables created by another role. Connections are READ COMMITTED whatever the database's default, and show as
@@ -96,8 +97,8 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
         config.addDataSourceProperty("ApplicationName", APPLICATION_NAME);
         config.addDataSourceProperty("tcpKeepAlive", bool(configuration, TCP_KEEP_ALIVE, false));
         String sslMode = configuration.get(SSL_MODE);
-        if (sslMode != null && !sslMode.isBlank()) {
-            String mode = sslMode.trim();
+        String mode = sslMode == null || sslMode.isBlank() ? null : sslMode.trim().toLowerCase(Locale.ROOT);
+        if (mode != null) {
             if (!SSL_MODES.contains(mode)) {
                 throw new IllegalArgumentException("Configuration '" + SSL_MODE + "' must be one of " + new TreeSet<>(SSL_MODES) + ": " + sslMode);
             }
@@ -105,6 +106,10 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
         }
         String sslRootCert = configuration.get(SSL_ROOT_CERT);
         if (sslRootCert != null && !sslRootCert.isBlank()) {
+            if (!"verify-ca".equals(mode) && !"verify-full".equals(mode)) { // otherwise no certificate is checked
+                throw new IllegalArgumentException("Configuration '" + SSL_ROOT_CERT + "' needs '" + SSL_MODE
+                        + "' verify-ca or verify-full; in mode " + (mode == null ? "prefer (the default)" : mode) + " it would be ignored");
+            }
             config.addDataSourceProperty("sslRootCert", sslRootCert.trim());
         }
         config.setAutoCommit(false);

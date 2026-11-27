@@ -364,7 +364,8 @@ message, it returns what it has (with the interrupt flag set again), so a receiv
 longer than `Integer.MAX_VALUE` milliseconds (about 24.8 days) are cut to that.
 
 A thread whose interrupt flag is set (an application stopping a worker) can still call the client: `producer`,
-`publish`, `lastMessage`, a consumer's seek and metadata work as on any thread, in every provider, and the flag is kept.
+`publish`, `flush`, `close`, `lastMessage`, a consumer's seek and metadata work as on any thread, in every provider,
+and the flag is kept.
 Only the waits that declare `InterruptedException` (`receive`, `receiveUpTo`) respond to it.
 
 ### Copying

@@ -2,6 +2,7 @@ package io.descoped.rawdata.provider.avro;
 
 import io.descoped.rawdata.api.RawdataDuplicateIdException;
 import io.descoped.rawdata.api.RawdataException;
+import io.descoped.rawdata.api.RawdataIds;
 import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataWriterConflictException;
@@ -268,6 +269,75 @@ class AvroTopicWriterTest {
     }
 
     /**
+     * A thread with its interrupt flag set waits for room among the pending uploads like any other, and keeps the flag.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void anInterruptedPublishWaitsWhileTooManyWindowsWaitForUpload() throws Exception {
+        GatedStore store = new GatedStore();
+        store.gated = true;
+        try (AvroRawdataClient client = client(store, 1, 1)) {
+            RawdataProducer producer = client.producer("t");
+            producer.publish(message("a", 1)); // sealed; its upload waits
+            assertTrue(store.uploading.await(10, TimeUnit.SECONDS));
+            boolean[] keptTheFlag = new boolean[1];
+            Thread second = new Thread(() -> {
+                Thread.currentThread().interrupt();
+                producer.publish(message("b", 1));
+                keptTheFlag[0] = Thread.currentThread().isInterrupted();
+            });
+            second.start();
+            second.join(300);
+            assertTrue(second.isAlive(), "waits for the upload before it");
+            store.release.countDown();
+            second.join(TimeUnit.SECONDS.toMillis(10));
+            assertFalse(second.isAlive());
+            assertTrue(keptTheFlag[0], "the interrupt is kept");
+            client.flush("t");
+            assertEquals(2, store.segments.size());
+        }
+    }
+
+    /**
+     * A thread with its interrupt flag set closes a producer like any other: it waits for the upload, and keeps the
+     * flag; nothing is left on disk.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void anInterruptedCloseWaitsForTheUpload() throws Exception {
+        GatedStore store = new GatedStore();
+        store.gated = true;
+        try (AvroRawdataClient client = client(store, 1 << 20, 4)) {
+            RawdataProducer producer = client.producer("t");
+            producer.publish(message("a", 1));
+            Thread releaser = new Thread(() -> {
+                try {
+                    if (store.uploading.await(10, TimeUnit.SECONDS)) {
+                        Thread.sleep(200); // the close is waiting by now
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    store.release.countDown();
+                }
+            });
+            releaser.start();
+            Thread.currentThread().interrupt();
+            try {
+                producer.close();
+                assertTrue(Thread.currentThread().isInterrupted(), "the interrupt is kept");
+            } finally {
+                Thread.interrupted();
+                releaser.join();
+            }
+            assertEquals(Set.of("t/0"), store.segments.keySet());
+        }
+        assertEquals(List.of(), files());
+    }
+
+    /**
      * Closing a producer waits at most {@code avro-file.close-timeout-seconds} for the uploads; the uploads go on, and
      * the client can still publish. Closing the client waits as long, then stops; the window stays on disk and the
      * next writer uploads it.
@@ -312,7 +382,7 @@ class AvroTopicWriterTest {
     void leftoversWithoutMessagesAreRemoved() throws Exception {
         Path topic = Files.createDirectories(folder.resolve("t"));
         Files.write(topic.resolve("0000000000000000000.window.avro"), new byte[]{'O', 'b', 'j'});
-        byte[] noHeader = AvroSegments.encode(List.of(), 1, io.descoped.rawdata.api.RawdataIds.beginningOfTime(), 64);
+        byte[] noHeader = AvroSegments.encode(List.of(), 1, RawdataIds.beginningOfTime(), 64);
         Files.write(topic.resolve("0000000000000000001.sealed.avro"), noHeader);
         GatedStore store = new GatedStore();
         try (AvroRawdataClient client = client(store, 1 << 20, 4)) {
@@ -386,9 +456,9 @@ class AvroTopicWriterTest {
     @Test
     void anInterruptedThreadStartsTheWriterAndRecovers() throws Exception {
         Path topic = Files.createDirectories(folder.resolve("t"));
-        RawdataMessage left = RawdataMessage.builder().id(io.descoped.rawdata.api.RawdataIds.generate()).position("left").build();
+        RawdataMessage left = RawdataMessage.builder().id(RawdataIds.generate()).position("left").build();
         Files.write(topic.resolve("0000000000000000000.sealed.avro"),
-                AvroSegments.encode(List.of(left), 0, io.descoped.rawdata.api.RawdataIds.beginningOfTime(), 64));
+                AvroSegments.encode(List.of(left), 0, RawdataIds.beginningOfTime(), 64));
         GatedStore store = new GatedStore();
         try (AvroRawdataClient client = client(store, 1 << 20, 4)) {
             RawdataProducer producer;

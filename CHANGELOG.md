@@ -21,8 +21,9 @@
 - A thread whose interrupt flag is set calls the client like any other thread, in every provider, and the flag is
   kept; the TCK checks it (`anInterruptedThreadReadsAndWritesAndKeepsTheFlag`). postgres already did. `filesystem`,
   `gcs` and `s3` failed `producer`, `lastMessage`, a consumer's seek and metadata with `RawdataException`, as a file
-  channel, the GCS HTTP client and the AWS SDK fail at once on such a thread; the engine now clears the flag for each
-  store call and sets it again after. An interrupt during a call stops it as before, and `receive` still throws
+  channel, the GCS HTTP client and the AWS SDK fail at once on such a thread; `flush` and `close` failed and left the
+  windows on disk, and `publish` skipped the wait for room among the pending uploads. The engine now clears the flag
+  for each store call and wait and sets it again after. An interrupt during a call stops it as before, and `receive` still throws
   `InterruptedException`.
 - The POM names the organisation, Descoped (https://descoped.io).
 

@@ -243,8 +243,9 @@ store at once and is visible when it returns.
    operating system keeps if the process crashes. Once `avro-file.sync.interval` bytes are written since the last
    force, the file is forced to disk, so a crash of the machine loses the calls written since: about that much, more after a larger call. Never through the file's
    NIO channel, which an interrupted publisher would close. The client's store calls from an application's thread
-   clear a pending interrupt flag for the call and set it again after (`AvroCallerStore`): a file channel, the GCS
-   HTTP client and the AWS SDK would fail at once on such a thread. The client's own upload and timer threads keep it,
+   and its waits there (for uploads in `flush` and `close`, for room among the pending uploads in `publish`) clear a
+   pending interrupt flag for the call and set it again after (`AvroCallerStore`): a file channel, the GCS HTTP
+   client and the AWS SDK would fail at once on such a thread. The client's own upload and timer threads keep it,
    so closing the client stops them.
 3. **Window closes.** The window is closed (sealed) when, after a call, it is at least `avro-file.max.bytes`; when a
    timer finds it `avro-file.max.seconds` old (so a producer that goes quiet still uploads; a publish to a window
@@ -556,7 +557,7 @@ Internal classes, for contributors:
 |---|---|
 | [`AvroTopicWriter`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroTopicWriter.java) | the upload window of one topic: append, seal, upload queue, failures, recovery |
 | [`AvroUploadLimiter`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroUploadLimiter.java) | the AIMD limit on a client's concurrent uploads |
-| [`AvroCallerStore`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroCallerStore.java) | the store as the client calls it: a pending interrupt of an application's thread does not fail a store call; the client's own threads |
+| [`AvroCallerStore`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroCallerStore.java) | the store as the client calls it: a pending interrupt of an application's thread fails neither a store call nor a wait for uploads; the client's own threads keep their flag |
 | [`AvroSegments`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroSegments.java) | the schema, the header and its summary, encoding, decoding the last block, reading leftovers |
 | [`AvroSegmentReader`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroSegmentReader.java) | ranged reads: the summary, the last message, the message stream |
 | [`AvroRawdataProducer`](../../rawdata-client-provider-avro/src/main/java/io/descoped/rawdata/provider/avro/AvroRawdataProducer.java) | an `OrderedRawdataProducer` that appends to the topic's window |

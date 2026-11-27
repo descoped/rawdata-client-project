@@ -10,8 +10,10 @@ import java.util.Set;
  * HTTP client and the AWS SDK all fail at once on a thread whose flag is set; here the flag is cleared for the call and
  * set again after it, so the application still sees it. An interrupt that arrives during the call stops it as before.
  * <p>
- * The client's own threads ({@link #thread}), which upload windows and close them on time, are left as they are:
- * closing the client interrupts them to stop uploads that outlast {@code avro-file.close-timeout-seconds}.
+ * The client's waits on an application's thread, for uploads ({@code flush}, {@code close}) and for room among the
+ * pending uploads ({@code publish}), go through {@link #call} the same way. The client's own threads
+ * ({@link #thread}), which upload windows and close them on time, are left as they are: closing the client interrupts
+ * them to stop uploads that outlast {@code avro-file.close-timeout-seconds}.
  */
 final class AvroCallerStore implements AvroStore {
 
@@ -40,12 +42,23 @@ final class AvroCallerStore implements AvroStore {
         }
     }
 
+    /**
+     * A store call, or a wait of the client, made on the caller's thread.
+     */
     @FunctionalInterface
-    private interface StoreCall<T> {
-        T call() throws IOException;
+    interface Call<T, E extends Exception> {
+        T call() throws E;
     }
 
-    private static <T> T call(StoreCall<T> call) throws IOException {
+    /**
+     * Makes a call on the current thread. On an application's thread, a pending interrupt flag is cleared for the call
+     * and set again after it; on the client's own threads, the call sees the flag.
+     *
+     * @param call the call
+     * @return what it returns
+     * @throws E what it throws
+     */
+    static <T, E extends Exception> T call(Call<T, E> call) throws E {
         if (Thread.currentThread() instanceof ClientThread) {
             return call.call();
         }

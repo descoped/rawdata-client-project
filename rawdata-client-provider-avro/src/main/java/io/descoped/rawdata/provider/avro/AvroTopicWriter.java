@@ -333,7 +333,7 @@ final class AvroTopicWriter {
         } finally {
             appendLock.unlock();
         }
-        boolean uploaded = awaitUploads(timeoutNanos);
+        boolean uploaded = AvroCallerStore.call(() -> awaitUploads(timeoutNanos));
         throwIfFailed();
         if (!uploaded) {
             throw new RawdataException("Waiting for the uploads" + OF_TOPIC + topic + " timed out ("
@@ -514,7 +514,11 @@ final class AvroTopicWriter {
         Path sealed = folder.resolve(name(window.segment) + SEALED_SUFFIX);
         Files.move(window.file, sealed, StandardCopyOption.ATOMIC_MOVE);
         tail = new AvroRawdataClient.Tail(window.segment, window.lastId);
-        enqueue(new Sealed(sealed, window.segment, window.lastId, window.digests));
+        Sealed next = new Sealed(sealed, window.segment, window.lastId, window.digests);
+        AvroCallerStore.call(() -> {
+            enqueue(next);
+            return null;
+        });
     }
 
     private synchronized void enqueue(Sealed sealed) {

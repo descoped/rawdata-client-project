@@ -46,8 +46,8 @@ import java.util.stream.Stream;
  * <b>Whole calls.</b> An Avro block ends only between publish calls, and is then written to the file, so a crash
  * leaves whole calls in the file, never part of one. Every call ends its block, so a call that returned survives a
  * crash of the process. The file is forced to disk every {@code avro-file.sync.interval} bytes, so a crash of the
- * machine loses the calls written since: about that much, more after a larger call. A write that fails in the middle of a call leaves the window as a crash would: its
- * complete blocks in the file, for recovery.
+ * machine loses the calls written since: about that much, more after a larger call. A write that fails in the
+ * middle of a call leaves the window as a crash would: its complete blocks in the file, for recovery.
  * <p>
  * <b>One writer.</b> The writer starts from the topic's end. A segment number that is taken when a window opens or
  * uploads means another process wrote the topic: the writer fails with {@link RawdataWriterConflictException}, its
@@ -458,7 +458,8 @@ final class AvroTopicWriter {
     /**
      * Writes the block being filled to the file, so the calls in it survive a crash of the process, and forces the file
      * to disk once {@code syncInterval} bytes are written since it was last forced, so a crash of the machine loses the
-     * calls written since: about that much, more after a larger call. Never through the file's channel: an interrupted caller would close it.
+     * calls written since: about that much, more after a larger call. Never through the file's channel: an
+     * interrupted caller would close it.
      */
     private void endBlock(Window window) throws IOException {
         window.previousBlockStart = window.blockStart;

@@ -16,10 +16,14 @@
 - `producer(topic)` on `filesystem`, `gcs` and `s3` can now throw: `RawdataException` when the topic's buffer folder is
   in use by another client or the store fails, and `RawdataWriterConflictException` when a window a crash left no
   longer follows the topic's end. These came from the first `publish` before.
-- Cost in `filesystem`, `gcs` and `s3`: one disk sync per publish call (a writer of one message per call is bound by
-  the disk's sync latency; batch calls pay it once) and about 20 bytes of Avro block framing per call in the segment.
-  The number of segments, requests and when consumers see a message are unchanged. `avro-file.sync.interval` now only
-  sizes Avro's block buffer and the blocks of a window rewritten by recovery.
+- Cost in `filesystem`, `gcs` and `s3`: about 20 bytes of Avro block framing per call in the segment, and no disk
+  sync per call. The number of segments, requests and when consumers see a message are unchanged.
+- A thread whose interrupt flag is set calls the client like any other thread, in every provider, and the flag is
+  kept; the TCK checks it (`anInterruptedThreadReadsAndWritesAndKeepsTheFlag`). postgres already did. `filesystem`,
+  `gcs` and `s3` failed `producer`, `lastMessage`, a consumer's seek and metadata with `RawdataException`, as a file
+  channel, the GCS HTTP client and the AWS SDK fail at once on such a thread; the engine now clears the flag for each
+  store call and sets it again after. An interrupt during a call stops it as before, and `receive` still throws
+  `InterruptedException`.
 - The POM names the organisation, Descoped (https://descoped.io).
 
 ## 3.1.0

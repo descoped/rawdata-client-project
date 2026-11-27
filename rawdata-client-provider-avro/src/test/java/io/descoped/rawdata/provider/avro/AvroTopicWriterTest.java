@@ -378,6 +378,37 @@ class AvroTopicWriterTest {
     }
 
     /**
+     * A thread with its interrupt flag set gets a producer like any other: the writer takes the folder's lock and
+     * uploads what a crash left. The flag is kept.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void anInterruptedThreadStartsTheWriterAndRecovers() throws Exception {
+        Path topic = Files.createDirectories(folder.resolve("t"));
+        RawdataMessage left = RawdataMessage.builder().id(io.descoped.rawdata.api.RawdataIds.generate()).position("left").build();
+        Files.write(topic.resolve("0000000000000000000.sealed.avro"),
+                AvroSegments.encode(List.of(left), 0, io.descoped.rawdata.api.RawdataIds.beginningOfTime(), 64));
+        GatedStore store = new GatedStore();
+        try (AvroRawdataClient client = client(store, 1 << 20, 4)) {
+            RawdataProducer producer;
+            Thread.currentThread().interrupt();
+            try {
+                producer = client.producer("t");
+                assertTrue(Thread.currentThread().isInterrupted(), "the interrupt is kept");
+            } finally {
+                Thread.interrupted();
+            }
+            assertEquals("left", client.lastMessage("t").position(), "recovered");
+            producer.publish(message("after", 1));
+            client.flush("t");
+            assertEquals("after", client.lastMessage("t").position());
+            assertEquals(Set.of("t/0", "t/1"), store.segments.keySet());
+        }
+        assertEquals(List.of(), files());
+    }
+
+    /**
      * Starting a topic's writer reads the store and may upload what a crash left: a slow store there holds up only
      * that topic, never the producers of other topics, also one whose writer shares the slot of the client's map of
      * writers.

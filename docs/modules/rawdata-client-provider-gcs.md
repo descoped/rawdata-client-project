@@ -471,6 +471,7 @@ Things to keep in mind:
 | `GcsIntegrityTest` | the lost-response check by size and CRC32C, and timeouts reported as throttling | a local server, and an HTTP client that always times out |
 | `GcsCredentialsTest` | the JWT, refresh tokens, the metadata server, token lifetimes, Application Default Credentials in Google's order, refused file types | a local server playing Google's token endpoint and the metadata server |
 | `GcsLiveContractTest` | the provider contract, unchanged | a real bucket, only with `-Drawdata.gcs.live=true` |
+| `GcsLiveCredentialsTest` | a gcloud user's token fetched again when it expires, and when GCS refuses it (401) | Google, only with `-Drawdata.gcs.live=true` and `authorized_user` credentials |
 
 The tests run on the class path, because Testcontainers' dependencies are automatic modules with split packages; the
 JPMS smoke test (`src/it/jpms/run.sh`) covers the module path against a fake GCS. They need Docker. Run them with:

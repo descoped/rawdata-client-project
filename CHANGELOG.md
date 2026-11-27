@@ -2,6 +2,9 @@
 
 ## 3.2.0
 
+- `gcs` has opt-in live tests against a real bucket (`-Drawdata.gcs.live=true`, never in CI): the contract, and a
+  gcloud user's token fetched again on expiry and on a 401. Both pass against Google.
+
 - Two guarantees in every provider, checked by the TCK (`aReturnedPublishSurvivesACrashAndLastMessageHoldsItOnceAProducerExists`,
   with the new hook `afterCrash`):
   - **A `publish` that returned survives a crash of the process.** postgres already committed each call. `filesystem`,

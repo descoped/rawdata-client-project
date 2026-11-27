@@ -95,7 +95,9 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
         config.addDataSourceProperty("password", required(configuration, PASSWORD));
         config.addDataSourceProperty("databaseName", required(configuration, DATABASE));
         config.addDataSourceProperty("ApplicationName", APPLICATION_NAME);
-        config.addDataSourceProperty("tcpKeepAlive", bool(configuration, TCP_KEEP_ALIVE, false));
+        if (bool(configuration, TCP_KEEP_ALIVE, false)) {
+            config.addDataSourceProperty("tcpKeepAlive", true); // pgjdbc's default is off
+        }
         String sslMode = configuration.get(SSL_MODE);
         String mode = sslMode == null || sslMode.isBlank() ? null : sslMode.trim().toLowerCase(Locale.ROOT);
         if (mode != null) {

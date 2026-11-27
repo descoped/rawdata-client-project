@@ -283,6 +283,12 @@ class PostgresProviderTest {
         unverifiedRoot.put("postgres.driver.ssl-root-cert", "/etc/ssl/root.crt");
         unverifiedRoot.put("postgres.driver.ssl-mode", "require");
         assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(unverifiedRoot), "a root certificate would be ignored");
+        Map<String, String> verifiedRoot = new HashMap<>(Postgres18.configuration());
+        verifiedRoot.put("postgres.driver.ssl-root-cert", "/etc/ssl/root.crt");
+        verifiedRoot.put("postgres.driver.ssl-mode", "verify-full");
+        RawdataException verifying = assertThrows(RawdataException.class, () -> RawdataClient.create(verifiedRoot),
+                "with verify-full the root certificate passes the check and the driver needs TLS");
+        assertTrue(String.valueOf(verifying.getCause()).contains("SSL"), String.valueOf(verifying.getCause()));
         Map<String, String> notABoolean = new HashMap<>(Postgres18.configuration());
         notABoolean.put("postgres.driver.tcp-keep-alive", "yes");
         assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(notABoolean));

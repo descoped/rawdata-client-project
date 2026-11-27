@@ -27,6 +27,12 @@
   windows on disk, and `publish` skipped the wait for room among the pending uploads. The engine now clears the flag
   for each store call and wait and sets it again after. An interrupt during a call stops it as before, and `receive`
   still throws `InterruptedException`.
+- `filesystem`, `gcs` and `s3`: any failure while a call is written, an upload runs or a window is sealed fails the
+  topic's writer, an `Error` such as out of memory too. Before, an `Error` in an upload left `flush` and `close`
+  waiting for ever (and publishes, once the pending uploads were full), and an unchecked exception while a call was
+  written left the writer running, so the next call's block also wrote part of the failed one. `close()` now always
+  stops the client's threads and closes the store, whatever failed before; the first failure is thrown and the others
+  are suppressed in it.
 - The POM names the organisation, Descoped (https://descoped.io).
 
 ## 3.1.0

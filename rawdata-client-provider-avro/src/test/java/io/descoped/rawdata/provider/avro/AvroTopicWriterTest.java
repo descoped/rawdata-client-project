@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -22,6 +23,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -30,6 +32,7 @@ import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -48,9 +51,11 @@ class AvroTopicWriterTest {
      */
     static final class GatedStore implements AvroStore {
 
-        enum Outcome { CREATE, FAIL, TAKEN }
+        enum Outcome { CREATE, FAIL, ERROR, TAKEN }
 
         final Map<String, byte[]> segments = new ConcurrentHashMap<>();
+        volatile boolean errorOnExists;
+        volatile boolean failOnClose;
         final CountDownLatch release = new CountDownLatch(1);
         final CountDownLatch uploading = new CountDownLatch(1);
         final CountDownLatch stored = new CountDownLatch(1); // a segment was put
@@ -75,6 +80,8 @@ class AvroTopicWriterTest {
             switch (outcome) {
                 case FAIL:
                     throw new IOException("the store is down");
+                case ERROR:
+                    throw new OutOfMemoryError("test: no memory for the upload");
                 case TAKEN:
                     return false;
                 default:
@@ -117,6 +124,9 @@ class AvroTopicWriterTest {
 
         @Override
         public boolean exists(String topic, long segment) throws IOException {
+            if (errorOnExists) {
+                throw new OutOfMemoryError("test: no memory to look for the segment");
+            }
             if (topic.equals(slowTopic)) {
                 slowEntered.countDown();
                 await(slowRelease);
@@ -146,7 +156,9 @@ class AvroTopicWriterTest {
 
         @Override
         public void close() {
-            // nothing to release
+            if (failOnClose) {
+                throw new IllegalStateException("test: the store's client failed to close");
+            }
         }
     }
 
@@ -194,6 +206,115 @@ class AvroTopicWriterTest {
             client.flush("t");
             assertEquals(1, store.segments.size(), "nothing more was written");
         }
+    }
+
+    /**
+     * An upload that fails with an {@link Error} (out of memory) fails the writer: a flush waiting for the upload
+     * returns with the failure instead of waiting for ever, and later publishes fail.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void anErrorInAnUploadFailsTheWriterAndWakesTheWaiters() throws Exception {
+        GatedStore store = new GatedStore();
+        store.outcome = GatedStore.Outcome.ERROR;
+        AvroRawdataClient client = client(store, 4000, 4);
+        RawdataProducer producer = client.producer("t");
+        producer.publish(message("large", 5000)); // over the size: sealed and uploaded
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> flushed = executor.submit(() -> client.flush("t"));
+            ExecutionException failed = assertThrows(ExecutionException.class, () -> flushed.get(10, TimeUnit.SECONDS));
+            assertInstanceOf(RawdataException.class, failed.getCause());
+            RawdataMessage after = message("after", 1);
+            assertThrows(RawdataException.class, () -> producer.publish(after));
+        } finally {
+            executor.shutdownNow();
+        }
+        assertThrows(RawdataException.class, client::close);
+        assertEquals(List.of("0000000000000000000.sealed.avro"), files(), "kept for the next writer");
+    }
+
+    /**
+     * A call that fails while it is written fails the writer: only the calls before it stay on disk, and nothing of
+     * it is written by a later block. Avro's writer is closed under the window here, so the next append throws, as
+     * Avro does on a failure in the middle of a call.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void aCallThatFailsWhileItIsWrittenFailsTheWriter() throws Exception {
+        GatedStore store = new GatedStore();
+        AvroRawdataClient client = client(store, 1 << 20, 4);
+        RawdataProducer producer = client.producer("t");
+        producer.publish(message("a", 1));
+        closeTheOpenWindowsAvroWriter(client.writer("t"));
+        RawdataMessage b = message("b", 1);
+        RuntimeException failed = assertThrows(RuntimeException.class, () -> producer.publish(b));
+        assertFalse(failed instanceof RawdataException, "the cause itself: " + failed);
+        RawdataMessage c = message("c", 1);
+        assertThrows(RawdataException.class, () -> producer.publish(c), "the writer is failed");
+        assertThrows(RawdataException.class, client::close);
+        assertEquals(List.of("a"), leftoverPositions(), "only the call before is on disk");
+        assertEquals(Set.of(), store.segments.keySet());
+    }
+
+    private static void closeTheOpenWindowsAvroWriter(AvroTopicWriter writer) throws Exception {
+        Field current = AvroTopicWriter.class.getDeclaredField("current");
+        current.setAccessible(true);
+        Object window = current.get(writer);
+        Field avro = window.getClass().getDeclaredField("writer");
+        avro.setAccessible(true);
+        ((java.io.Closeable) avro.get(window)).close(); // writes what it holds: the calls before, ended blocks
+    }
+
+    /**
+     * An {@link Error} from the store when a window opens fails the writer and reaches the caller; later calls fail
+     * with the writer's failure.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void anErrorWhenAWindowOpensFailsTheWriter() throws Exception {
+        GatedStore store = new GatedStore();
+        AvroRawdataClient client = client(store, 1 << 20, 4);
+        RawdataProducer producer = client.producer("t");
+        store.errorOnExists = true;
+        RawdataMessage a = message("a", 1);
+        assertThrows(OutOfMemoryError.class, () -> producer.publish(a));
+        store.errorOnExists = false;
+        RawdataMessage b = message("b", 1);
+        RawdataException failed = assertThrows(RawdataException.class, () -> producer.publish(b));
+        assertInstanceOf(OutOfMemoryError.class, failed.getCause().getCause(), "the writer's failure carries the Error");
+        client.close(); // the failure was reported and nothing was written: closing does not throw it again
+        assertTrue(client.isClosed());
+    }
+
+    /**
+     * Closing a client whose writers of two topics failed, and whose store fails to close, throws the first failure,
+     * with the others suppressed in it, and still stops the client: it is closed, and its folder locks are released.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void closingAfterTwoFailedTopicsThrowsTheFirstWithTheOtherSuppressed() throws Exception {
+        GatedStore store = new GatedStore();
+        store.outcome = GatedStore.Outcome.FAIL;
+        AvroRawdataClient client = client(store, 4000, 4);
+        client.producer("t").publish(message("large", 5000)); // sealed; its upload fails
+        client.producer("u").publish(message("large", 5000));
+        store.failOnClose = true;
+        RawdataException closing = assertThrows(RawdataException.class, client::close);
+        assertEquals(2, closing.getSuppressed().length, "the other topic's failure, and the store's");
+        assertInstanceOf(IllegalStateException.class, closing.getSuppressed()[1]);
+        store.failOnClose = false;
+        assertTrue(client.isClosed());
+        store.outcome = GatedStore.Outcome.CREATE;
+        try (AvroRawdataClient next = client(store, 4000, 4)) {
+            next.producer("t"); // the folder lock was released, and the window is uploaded
+            next.producer("u");
+        }
+        assertEquals(Set.of("t/0", "u/0"), store.segments.keySet());
     }
 
     /**

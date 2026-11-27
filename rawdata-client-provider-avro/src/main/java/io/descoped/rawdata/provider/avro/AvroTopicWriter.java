@@ -208,6 +208,7 @@ final class AvroTopicWriter {
      */
     void publish(Function<UUID, List<RawdataMessage>> withIds, Map<RawdataMessage, byte[]> given) {
         appendLock.lock();
+        Window writing = null; // the window while the call is written to it
         try {
             throwIfFailed();
             if (current != null && ageSeconds(current) >= settings.maxSeconds()) {
@@ -218,6 +219,7 @@ final class AvroTopicWriter {
             }
             Window window = current;
             List<RawdataMessage> stored = notTaken(withIds.apply(window.lastId), given, window);
+            writing = window;
             append(window, stored);
             for (RawdataMessage message : stored) {
                 window.firstId = window.firstId == null ? message.id() : AvroSegments.lowest(window.firstId, message.id());
@@ -228,11 +230,26 @@ final class AvroTopicWriter {
             if (window.blockBytes > 0) {
                 endBlock(window); // a call that returns is written to the file
             }
+            writing = null;
             if (window.blockStart >= settings.maxBytes()) {
                 sealOrFail();
             }
         } catch (IOException e) {
+            tear(writing);
             throw fail(storeFailure("Writing the upload window" + OF_TOPIC + topic, e));
+        } catch (RuntimeException e) {
+            if (writing == null) {
+                throw e; // nothing of the call is written: a refused id, a failed writer
+            }
+            tear(writing);
+            throw fail(e);
+        } catch (Error e) { // NOSONAR: an Error fails the writer, so no one waits for it, and is rethrown
+            // Also before anything of the call is written (an out of memory while ids are given, say): unlike a
+            // refused id, an Error leaves the writer in no known state.
+            if (writing != null) {
+                tear(writing);
+            }
+            throw failed(e);
         } finally {
             appendLock.unlock();
         }
@@ -294,14 +311,19 @@ final class AvroTopicWriter {
     }
 
     private static void append(Window window, List<RawdataMessage> stored) throws IOException {
-        try {
-            for (RawdataMessage message : stored) {
-                window.writer.append(AvroSegments.toRecord(message));
-                window.blockBytes += AvroSegments.estimatedSize(message);
-            }
-        } catch (IOException | RuntimeException e) {
-            window.torn = true; // part of the call is in Avro's block buffer, never written
-            throw e;
+        for (RawdataMessage message : stored) {
+            window.writer.append(AvroSegments.toRecord(message));
+            window.blockBytes += AvroSegments.estimatedSize(message);
+        }
+    }
+
+    /**
+     * Marks a window that a call failed to write: part of the call may be in Avro's block buffer or the file. Nothing
+     * more is written to it, and only its blocks written before are kept.
+     */
+    private static void tear(Window window) {
+        if (window != null) {
+            window.torn = true;
         }
     }
 
@@ -449,7 +471,7 @@ final class AvroTopicWriter {
         } catch (IOException e) {
             fail(storeFailure(CLOSING + topic, e));
         } catch (RuntimeException e) {
-            LOG.log(System.Logger.Level.WARNING, CLOSING + topic + FAILED, e); // the writer is failed
+            // sealOrFail failed the writer and logged it
         } finally {
             appendLock.unlock();
         }
@@ -493,6 +515,8 @@ final class AvroTopicWriter {
             seal();
         } catch (RuntimeException e) {
             throw fail(e);
+        } catch (Error e) { // NOSONAR: an Error fails the writer, so no one waits for it, and is rethrown
+            throw failed(e);
         }
     }
 
@@ -572,6 +596,8 @@ final class AvroTopicWriter {
             } catch (RuntimeException e) {
                 fail(e);
                 return;
+            } catch (Error e) { // NOSONAR: the task's entry point; the waiters are woken and the Error rethrown
+                throw failed(e);
             }
             synchronized (this) {
                 pending.pollFirst();
@@ -610,8 +636,10 @@ final class AvroTopicWriter {
      * waiting is woken, so a flush or close that returns sees them set aside.
      */
     private RuntimeException fail(RuntimeException cause) {
+        boolean first;
         synchronized (this) {
-            if (failure == null) {
+            first = failure == null;
+            if (first) {
                 failure = cause;
                 if (cause instanceof RawdataWriterConflictException) {
                     for (Sealed sealed : pending) {
@@ -623,6 +651,9 @@ final class AvroTopicWriter {
             uploading = false;
             notifyAll();
         }
+        if (!first) {
+            return cause; // logged when the writer failed
+        }
         if (cause instanceof RawdataWriterConflictException) {
             LOG.log(System.Logger.Level.ERROR, "Another process writes topic " + topic
                     + "; this client stops writing it. Windows not uploaded are kept as *" + INVALID_SUFFIX + " in " + folder);
@@ -631,6 +662,15 @@ final class AvroTopicWriter {
                     + folder + " and are uploaded when a writer of the topic starts again", cause);
         }
         return cause;
+    }
+
+    /**
+     * Fails the writer with an {@link Error} (out of memory, for example), so that no one waits for it, and returns
+     * the error for the caller to rethrow.
+     */
+    private Error failed(Error error) {
+        fail(new RawdataException(String.valueOf(error), error)); // reported as "The writer of topic … failed: <error>"
+        return error;
     }
 
     /**

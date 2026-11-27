@@ -33,6 +33,10 @@
   written left the writer running, so the next call's block also wrote part of the failed one. `close()` now always
   stops the client's threads and closes the store, whatever failed before; the first failure is thrown and the others
   are suppressed in it.
+- `filesystem`, `gcs` and `s3`: recovery keeps a window it rewrites (an open window cut back to its complete
+  blocks) as the sealed window before it uploads it. Before, a crash between that upload and the file's removal made
+  the next start set the window aside and fail with `RawdataWriterConflictException`, though no other process wrote
+  the topic.
 - The POM names the organisation, Descoped (https://descoped.io).
 
 ## 3.1.0

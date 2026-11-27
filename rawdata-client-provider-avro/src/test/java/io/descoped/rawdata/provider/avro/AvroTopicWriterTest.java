@@ -51,7 +51,7 @@ class AvroTopicWriterTest {
      */
     static final class GatedStore implements AvroStore {
 
-        enum Outcome { CREATE, FAIL, ERROR, TAKEN }
+        enum Outcome { CREATE, CREATE_THEN_FAIL, FAIL, ERROR, TAKEN }
 
         final Map<String, byte[]> segments = new ConcurrentHashMap<>();
         volatile boolean errorOnExists;
@@ -84,6 +84,9 @@ class AvroTopicWriterTest {
                     throw new OutOfMemoryError("test: no memory for the upload");
                 case TAKEN:
                     return false;
+                case CREATE_THEN_FAIL:
+                    segments.putIfAbsent(topic + "/" + segment, content.clone());
+                    throw new IOException("test: stored, then the process crashed before it knew");
                 default:
                     byte[] before = segments.putIfAbsent(topic + "/" + segment, content.clone());
                     stored.countDown();
@@ -495,6 +498,57 @@ class AvroTopicWriterTest {
             next.flush("t");
         }
         assertEquals(List.of(), files(), "the next writer uploaded what was left");
+    }
+
+    /**
+     * A window that a crash left open is uploaded by the next writer, which then crashes before it removes the file:
+     * the writer after it finds the same bytes in the store, removes the file and goes on. It is not taken for
+     * another writer.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void aRecoveredWindowUploadedBeforeASecondCrashIsNotAConflict() throws Exception {
+        Path topic = Files.createDirectories(folder.resolve("t"));
+        RawdataMessage left = RawdataMessage.builder().id(RawdataIds.generate()).position("left").put("payload", new byte[10]).build();
+        Files.write(topic.resolve("0000000000000000000.window.avro"),
+                AvroSegments.encode(List.of(left), 0, RawdataIds.beginningOfTime(), 64));
+        GatedStore store = new GatedStore();
+        store.outcome = GatedStore.Outcome.CREATE_THEN_FAIL; // the upload is stored, then the process crashes
+        try (AvroRawdataClient crashing = client(store, 1 << 20, 4)) {
+            assertThrows(RawdataException.class, () -> crashing.producer("t"));
+        }
+        assertEquals(Set.of("t/0"), store.segments.keySet(), "uploaded before the crash");
+        store.outcome = GatedStore.Outcome.CREATE;
+        try (AvroRawdataClient next = client(store, 1 << 20, 4)) {
+            next.producer("t").publish(message("after", 1));
+            next.flush("t");
+            assertEquals("after", next.lastMessage("t").position());
+        }
+        assertEquals(Set.of("t/0", "t/1"), store.segments.keySet());
+        assertEquals(List.of(), files());
+    }
+
+    /**
+     * A crash while a recovered window was being written sealed leaves a temporary file next to the window: the next
+     * writer removes it and uploads the window.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void aResealCutShortIsRemovedAndTheWindowUploaded() throws Exception {
+        Path topic = Files.createDirectories(folder.resolve("t"));
+        RawdataMessage left = RawdataMessage.builder().id(RawdataIds.generate()).position("left").build();
+        Files.write(topic.resolve("0000000000000000000.window.avro"),
+                AvroSegments.encode(List.of(left), 0, RawdataIds.beginningOfTime(), 64));
+        Files.write(topic.resolve("0000000000000000000.reseal.tmp"), new byte[]{'O', 'b'});
+        GatedStore store = new GatedStore();
+        try (AvroRawdataClient client = client(store, 1 << 20, 4)) {
+            client.producer("t");
+            assertEquals("left", client.lastMessage("t").position());
+        }
+        assertEquals(Set.of("t/0"), store.segments.keySet());
+        assertEquals(List.of(), files());
     }
 
     /**

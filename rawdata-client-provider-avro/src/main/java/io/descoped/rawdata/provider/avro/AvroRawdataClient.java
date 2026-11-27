@@ -205,32 +205,55 @@ public final class AvroRawdataClient implements RawdataClient {
         }
         RuntimeException failed = null; // the first failure is thrown, the others are suppressed in it
         try {
-            long end = System.nanoTime() + closeTimeoutNanos(); // one limit for the whole close, not one per topic
-            for (AvroTopicWriter writer : writers.values()) {
-                try {
-                    writer.close(Math.max(0, end - System.nanoTime()));
-                } catch (RuntimeException e) {
-                    failed = first(failed, e);
-                }
-            }
-            writers.clear();
+            failed = closeWriters();
             for (Object producerOrConsumer : open) {
-                if (producerOrConsumer instanceof AvroRawdataProducer producer) {
-                    producer.close();
-                } else if (producerOrConsumer instanceof AvroRawdataConsumer consumer) {
-                    consumer.close();
-                }
+                failed = closeOne(producerOrConsumer, failed);
             }
-        } catch (RuntimeException e) {
-            failed = first(failed, e);
         } finally {
             scheduler.shutdownNow();
             executor.shutdownNow();
-            store.close(); // whatever failed before: the threads stop and the store's resources are released
+            failed = closeOne(store, failed); // whatever failed before: the store's resources are released
         }
         if (failed != null) {
             throw failed;
         }
+    }
+
+    /**
+     * Closes a producer, a consumer or the store, adding a failure to the ones before.
+     */
+    private static RuntimeException closeOne(Object closeable, RuntimeException failed) {
+        try {
+            if (closeable instanceof AvroRawdataProducer producer) {
+                producer.close();
+            } else if (closeable instanceof AvroRawdataConsumer consumer) {
+                consumer.close();
+            } else if (closeable instanceof AvroStore store) {
+                store.close();
+            }
+            return failed;
+        } catch (RuntimeException e) {
+            return first(failed, e);
+        }
+    }
+
+    /**
+     * Closes every writer within one close timeout for them all.
+     *
+     * @return the first failure, the others suppressed in it, or null
+     */
+    private RuntimeException closeWriters() {
+        RuntimeException failed = null;
+        long end = System.nanoTime() + closeTimeoutNanos(); // one limit for the whole close, not one per topic
+        for (AvroTopicWriter writer : writers.values()) {
+            try {
+                writer.close(Math.max(0, end - System.nanoTime()));
+            } catch (RuntimeException e) {
+                failed = first(failed, e);
+            }
+        }
+        writers.clear();
+        return failed;
     }
 
     private static RuntimeException first(RuntimeException failed, RuntimeException e) {

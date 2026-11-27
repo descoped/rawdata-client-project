@@ -304,7 +304,9 @@ reader of a long topic needs about 2 log₂(n) cheap requests the first time, an
 ### Graceful shutdown
 
 - `producer.close()` uploads its topic's open window and waits until every window of the topic is uploaded.
-- `client.close()` does the same for every topic, then closes the producers, consumers and the store.
+- `client.close()` does the same for every topic, then closes the producers, consumers and the store. It always stops
+  its threads and closes the store, whatever failed before; it throws the first failure, with the others suppressed
+  in it.
 - Neither waits longer than `avro-file.close-timeout-seconds` (30). For `client.close()` that is one limit for all
   topics together, not one per topic.
 - When the time runs out, `close()` throws `RawdataException` ("… timed out …"), and the windows not uploaded stay
@@ -399,6 +401,9 @@ random sync marker, so equal bytes on a retry mean the write was yours.
   if windows are left that were not uploaded.
 - **A disk failure** while writing the window fails the writer the same way. If it came in the middle of a call,
   the window is left as a crash would leave it, its complete blocks on disk, and recovery cuts it back.
+- **Any other failure** while a call is written, an upload runs or a window is sealed, an `Error` such as out of
+  memory included, fails the writer the same way; a `flush` or `close` waiting for the uploads returns with it, and
+  an `Error` is rethrown to the thread it came on. A refused id fails only its call, which wrote nothing.
 - **Another process writing the topic** shows as a segment number that is already taken, when a window opens or when
   it is uploaded. The writer fails with `RawdataWriterConflictException`, which names the topic, and logs an error.
   Its windows not yet uploaded, the open one included, are set aside as `*.invalid` files and never deleted. Every

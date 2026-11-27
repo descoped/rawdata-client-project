@@ -243,7 +243,9 @@ final class AvroTopicWriter {
             }
             tear(writing);
             throw fail(e);
-        } catch (Error e) {
+        } catch (Error e) { // NOSONAR: an Error fails the writer, so no one waits for it, and is rethrown
+            // Also before anything of the call is written (an out of memory while ids are given, say): unlike a
+            // refused id, an Error leaves the writer in no known state.
             if (writing != null) {
                 tear(writing);
             }
@@ -513,7 +515,7 @@ final class AvroTopicWriter {
             seal();
         } catch (RuntimeException e) {
             throw fail(e);
-        } catch (Error e) {
+        } catch (Error e) { // NOSONAR: an Error fails the writer, so no one waits for it, and is rethrown
             throw failed(e);
         }
     }
@@ -594,8 +596,8 @@ final class AvroTopicWriter {
             } catch (RuntimeException e) {
                 fail(e);
                 return;
-            } catch (Error e) {
-                throw failed(e); // the waiters are woken; the executor's thread ends with the error
+            } catch (Error e) { // NOSONAR: the task's entry point; the waiters are woken and the Error rethrown
+                throw failed(e);
             }
             synchronized (this) {
                 pending.pollFirst();
@@ -634,8 +636,10 @@ final class AvroTopicWriter {
      * waiting is woken, so a flush or close that returns sees them set aside.
      */
     private RuntimeException fail(RuntimeException cause) {
+        boolean first;
         synchronized (this) {
-            if (failure == null) {
+            first = failure == null;
+            if (first) {
                 failure = cause;
                 if (cause instanceof RawdataWriterConflictException) {
                     for (Sealed sealed : pending) {
@@ -646,6 +650,9 @@ final class AvroTopicWriter {
             }
             uploading = false;
             notifyAll();
+        }
+        if (!first) {
+            return cause; // logged when the writer failed
         }
         if (cause instanceof RawdataWriterConflictException) {
             LOG.log(System.Logger.Level.ERROR, "Another process writes topic " + topic

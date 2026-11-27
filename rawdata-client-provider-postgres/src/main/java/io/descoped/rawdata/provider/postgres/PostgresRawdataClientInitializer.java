@@ -8,6 +8,7 @@ import io.descoped.rawdata.api.RawdataClientInitializer;
 import io.descoped.rawdata.api.RawdataException;
 import io.descoped.service.provider.api.ProviderName;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -112,7 +113,7 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
         if (value == null || value.isBlank()) {
             return defaultValue;
         }
-        return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
+        return switch (value.trim().toLowerCase(Locale.ROOT)) {
             case "true" -> true;
             case "false" -> false;
             default -> throw new IllegalArgumentException("Configuration '" + key + "' must be true or false: " + value);

@@ -31,7 +31,6 @@ import java.util.TreeSet;
  */
 final class GcsAvroStore implements AvroStore {
 
-
     private final GcsClient client;
     private final String bucket;
     private final String prefix;

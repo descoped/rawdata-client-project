@@ -113,9 +113,6 @@ class RawdataCopyToolTest {
     }
 
     /**
-     * A second run continues after the target's last id and copies only what is new.
-     */
-    /**
      * The tool takes the target's limits from {@code target.*}: messages that together exceed the target's publish
      * limit are copied in calls that fit it.
      */
@@ -135,6 +132,9 @@ class RawdataCopyToolTest {
         assertEquals(read(source, "a"), read(target, "a"));
     }
 
+    /**
+     * A second run continues after the target's last id and copies only what is new.
+     */
     @Test
     void aSecondRunContinuesWhereTheFirstStopped() throws Exception {
         Map<String, String> source = filesystem("source");

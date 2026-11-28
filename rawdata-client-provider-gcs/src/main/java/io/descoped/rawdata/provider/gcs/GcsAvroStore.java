@@ -18,16 +18,18 @@ import java.util.TreeSet;
  * <p>
  * Every upload carries its CRC32C ({@code X-Goog-Hash}), so GCS refuses bytes damaged on the way. The client retries
  * a failed upload. If an upload succeeded but its response was lost, the retry fails its precondition; the store then
- * compares the object's size and CRC32C with its own, and only if they match reads the object. If it holds the bytes
+ * compares the object's size and CRC32C with its own, and only if they match reads that generation, in ranges. If it holds the bytes
  * it uploaded (an Avro file carries a random sync marker, so no other writer's file is the same) the segment counts
  * as created. Another writer's segment is so told apart without downloading it.
  * <p>
  * A metadata entry is written with a precondition on the generation it replaces (or that there is none), so the client
  * may retry the upload, for example when GCS limits writes to one object name to about one per second. When another
- * writer changed the entry meanwhile, the write starts over, so the last write wins.
+ * writer changed the entry meanwhile, the write starts over, so the last write wins; after 10 rounds that each lost, it
+ * gives up with an {@link IOException} naming the object.
  * <p>
- * GCS answers 404 for a missing object and for a missing bucket. The first time the store gets one, it lists the
- * bucket once, so a wrong bucket fails instead of looking like an empty topic.
+ * GCS answers 404 for a missing object and for a missing bucket. The first time the store gets one, on a read or a
+ * delete, it lists the bucket once, so a wrong bucket fails instead of looking like an empty topic or a removal that
+ * succeeded.
  */
 final class GcsAvroStore implements AvroStore {
 
@@ -168,7 +170,8 @@ final class GcsAvroStore implements AvroStore {
             }
             // another writer changed the entry meanwhile; write again over its value
         }
-        throw new IOException("Writing " + object + " failed: it changed under every one of " + METADATA_ROUNDS + " writes");
+        throw new IOException("Writing " + object + " failed: it changed under every one of " + METADATA_ROUNDS
+                + " writes");
     }
 
     @Override

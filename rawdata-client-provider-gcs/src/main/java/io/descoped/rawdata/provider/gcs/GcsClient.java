@@ -253,9 +253,6 @@ final class GcsClient {
     }
 
     /**
-     * Deletes an object; does nothing if there is none.
-     */
-    /**
      * Deletes an object.
      *
      * @return whether it was there; GCS answers a missing bucket as a missing object, so false is either

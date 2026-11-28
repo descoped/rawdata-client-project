@@ -186,7 +186,8 @@ object it had just created. The store tells the two apart:
 1. It reads the object's size and CRC32C (one small metadata request).
 2. If either differs from its own bytes, the segment is another writer's: `create` returns false, without
    downloading anything.
-3. If both match, it downloads the object and compares it byte for byte. Equal bytes mean the segment is its own
+3. If both match, it reads that generation in 8 MiB ranges and compares each byte for byte, so the segment is never
+   held whole in memory a second time. Equal bytes mean the segment is its own
    and counts as created. An Avro file carries a random sync marker, so another writer's file is never equal.
 
 ### Throttling report
@@ -200,9 +201,9 @@ limiter.
 
 ### A missing bucket is not an empty topic
 
-GCS answers 404 both for a missing object and for a missing bucket. The first time the store gets a 404 on a read,
-it lists the bucket once (`maxResults=1` under the prefix). If the bucket does not exist, that listing fails, and
-the client fails with `RawdataException` instead of reporting an empty topic. Once the bucket has been seen, the
+GCS answers 404 both for a missing object and for a missing bucket. The first time the store gets a 404 on a read or
+on the delete of a metadata entry, it lists the bucket once (`maxResults=1` under the prefix). If the bucket does not exist, that listing fails, and
+the client fails with `RawdataException` instead of reporting an empty topic or a removal that succeeded. Once the bucket has been seen, the
 store does not ask again.
 
 ## How it works
@@ -232,7 +233,7 @@ The JSON API calls it makes:
 | object info | `GET /storage/v1/b/<bucket>/o/<object>?fields=generation,size,crc32c` |
 | list | `GET /storage/v1/b/<bucket>/o?prefix=<folder>&delimiter=/`, following `nextPageToken` |
 | bucket check | `GET /storage/v1/b/<bucket>/o?prefix=<prefix>&maxResults=1` |
-| delete | `DELETE /storage/v1/b/<bucket>/o/<object>`; a 404 counts as deleted |
+| delete | `DELETE /storage/v1/b/<bucket>/o/<object>`; a 404 counts as deleted once the bucket check passed |
 
 Object names and query values are percent-encoded byte by byte, everything but the unreserved characters of RFC
 3986, so `/` in an object name is sent as `%2F` as GCS requires.
@@ -258,7 +259,7 @@ sequenceDiagram
         alt size or CRC32C differ
             S-->>E: false (another writer: RawdataWriterConflictException)
         else both match
-            S->>G: GET download
+            S->>G: GET ranges of that generation (8 MiB each)
             S-->>E: true if the bytes are equal (our own upload, its response lost)
         end
     end
@@ -282,10 +283,11 @@ than every 10 ms. Each look is one request, so a low interval costs requests on 
 
 - `put` reads the entry's current generation, then uploads with that generation as the precondition (or `0` when
   there is none). If another writer changed the entry in between (412), it reads the generation again and writes
-  again: the last write wins. A reader sees the old value or the new, never a mix.
+  again: the last write wins. After 10 rounds that each lost, it gives up with an error naming the object
+  (`RawdataException` to the application). A reader sees the old value or the new, never a mix.
 - `get` downloads the entry; a 404 is no entry (after the bucket check).
 - `keys` lists `<prefix><topic>/metadata/` with `/` as delimiter, following every page.
-- `remove` deletes the entry; a missing entry is fine.
+- `remove` deletes the entry; a missing entry is fine, in a bucket that exists (after the bucket check).
 
 GCS limits writes to one object name to about one per second. A metadata entry written more often gets 429, which
 the client retries with backoff, so a tight loop of `put` on one key is slow rather than failing.

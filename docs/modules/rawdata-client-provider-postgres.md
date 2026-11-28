@@ -480,7 +480,9 @@ into tables of their own, inside PostgreSQL, when a client starts with `postgres
       reads only the catalog, so readers need no privilege on the migration's tables.
 3. **Start the other clients without the key.** Leave it off from then on: once the move is done it does nothing.
 4. **Drop the old tables** (`rawdata_v31_message`, `_content`, `_metadata` and `_migrated`) when you no longer need
-   them. Nothing drops them; until then the schema holds the data twice.
+   them, `rawdata_v31_migrated` last or with the others: without it, the moved tables alone cannot tell a finished move
+   from one whose progress table was lost, and a client refuses to start. Nothing drops them; until then the schema
+   holds the data twice.
 
 Without the key, a client refuses to start on a schema that has 3.1 tables, or a move not finished, naming the key, so
 3.1 topics never read as empty. If a restarted 3.1 client makes its tables again after the fence, every client of this

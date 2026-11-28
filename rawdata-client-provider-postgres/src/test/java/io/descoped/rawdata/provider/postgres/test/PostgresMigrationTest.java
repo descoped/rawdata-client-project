@@ -232,6 +232,13 @@ class PostgresMigrationTest {
         try (RawdataClient again = RawdataClient.create(configuration)) {
             assertEquals(4, readAll(again, "a").size(), "after the move a client starts without the key");
         }
+        execute("ALTER TABLE " + schema + ".rawdata_v31_migrated RENAME TO kept_aside");
+        RawdataException unknown = assertThrows(RawdataException.class, () -> RawdataClient.create(configuration));
+        assertTrue(unknown.getMessage().contains("cannot be told"), unknown.getMessage());
+        for (String kind : List.of("message", "content", "metadata")) {
+            execute("DROP TABLE " + schema + ".rawdata_v31_" + kind + " CASCADE");
+        }
+        RawdataClient.create(configuration).close(); // with the old tables dropped, nothing of 3.1 is left
     }
 
     /**

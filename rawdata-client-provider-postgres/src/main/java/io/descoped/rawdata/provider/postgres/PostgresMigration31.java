@@ -120,6 +120,11 @@ final class PostgresMigration31 {
                         + " one client with " + PostgresRawdataClientInitializer.MIGRATE_31 + TO_MIGRATE + " to move them");
             }
             fence();
+        } else if (found.fenced() && !found.progress() && !found.done()) {
+            throw new RawdataException("PostgreSQL schema '" + schema.name() + "' has 3.1's moved tables ("
+                    + schema.table(FENCED) + ") but neither " + schema.table(PROGRESS) + " nor " + schema.table(DONE)
+                    + ": whether every topic was moved cannot be told. Restore the table, or drop " + schema.table(FENCED)
+                    + " if the move had finished");
         } else if (!found.progress()) {
             return; // nothing of 3.1, or a move that is done
         } else if (!migrate) {

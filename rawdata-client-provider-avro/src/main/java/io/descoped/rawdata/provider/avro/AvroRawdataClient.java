@@ -13,6 +13,7 @@ import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataTopics;
 import io.descoped.rawdata.api.RawdataWriterConflictException;
 import io.descoped.rawdata.api.spi.IdRange;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -57,6 +58,7 @@ public final class AvroRawdataClient implements RawdataClient {
     private final AvroUploadLimiter limiter;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final Set<Object> open = ConcurrentHashMap.newKeySet(); // producers and consumers
+    private final RawdataLimits limits;
     private final Map<String, Tail> tails = new ConcurrentHashMap<>(); // the last segment seen of each topic
     private final Map<String, AvroTopicWriter> writers = new ConcurrentHashMap<>();
     private final Map<String, ReentrantLock> publishLocks = new ConcurrentHashMap<>();
@@ -77,11 +79,13 @@ public final class AvroRawdataClient implements RawdataClient {
      *
      * @param store              the store; the client closes it
      * @param window             how producers buffer before they upload
+     * @param limits             the limits of a publish
      * @param pollIntervalMillis how often a waiting consumer looks for a new segment, 1 or more
      */
-    public AvroRawdataClient(AvroStore store, AvroUploadWindow window, long pollIntervalMillis) {
+    public AvroRawdataClient(AvroStore store, AvroUploadWindow window, RawdataLimits limits, long pollIntervalMillis) {
         this.store = new AvroCallerStore(Objects.requireNonNull(store, "store"));
         this.window = Objects.requireNonNull(window, "window");
+        this.limits = Objects.requireNonNull(limits, "limits");
         if (pollIntervalMillis < 1) {
             throw new IllegalArgumentException("The poll interval must be 1 ms or more: " + pollIntervalMillis);
         }
@@ -110,7 +114,7 @@ public final class AvroRawdataClient implements RawdataClient {
         } finally {
             lock.unlock();
         }
-        AvroRawdataProducer producer = new AvroRawdataProducer(this, name);
+        AvroRawdataProducer producer = new AvroRawdataProducer(this, name, limits);
         open.add(producer);
         return producer;
     }

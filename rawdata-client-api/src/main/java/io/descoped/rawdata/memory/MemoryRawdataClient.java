@@ -11,6 +11,7 @@ import io.descoped.rawdata.api.RawdataNoSuchPositionException;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataTopics;
 import io.descoped.rawdata.api.spi.IdRange;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 
 import java.time.Duration;
 import java.util.Map;
@@ -30,6 +31,7 @@ final class MemoryRawdataClient implements RawdataClient {
 
     private static final AtomicInteger THREADS = new AtomicInteger();
 
+    private final RawdataLimits limits;
     private final Map<String, MemoryRawdataTopic> topics = new ConcurrentHashMap<>();
     private final Set<Object> open = ConcurrentHashMap.newKeySet(); // producers and consumers
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -38,6 +40,14 @@ final class MemoryRawdataClient implements RawdataClient {
         thread.setDaemon(true);
         return thread;
     });
+
+    MemoryRawdataClient(RawdataLimits limits) {
+        this.limits = Objects.requireNonNull(limits, "limits");
+    }
+
+    RawdataLimits limits() {
+        return limits;
+    }
 
     @Override
     public RawdataProducer producer(String topic) {

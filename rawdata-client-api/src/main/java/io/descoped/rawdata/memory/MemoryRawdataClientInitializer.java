@@ -2,12 +2,14 @@ package io.descoped.rawdata.memory;
 
 import io.descoped.rawdata.api.RawdataClient;
 import io.descoped.rawdata.api.RawdataClientInitializer;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 import io.descoped.service.provider.api.ProviderName;
 
 import java.util.Map;
 
 /**
- * The {@code memory} provider: topics in memory, gone when the client is closed. No configuration.
+ * The {@code memory} provider: topics in memory, gone when the client is closed. Configuration: the limits of
+ * {@link RawdataLimits}, nothing else.
  */
 @ProviderName("memory")
 public class MemoryRawdataClientInitializer implements RawdataClientInitializer {
@@ -21,6 +23,6 @@ public class MemoryRawdataClientInitializer implements RawdataClientInitializer 
 
     @Override
     public RawdataClient initialize(Map<String, String> configuration) {
-        return new MemoryRawdataClient();
+        return new MemoryRawdataClient(RawdataLimits.of(configuration));
     }
 }

@@ -14,21 +14,12 @@ import java.util.UUID;
  * made by {@link #builder()} only, so a store can keep a message as it is.
  * <p>
  * The position, the ordering group and the content keys may be any string without the NUL character (U+0000), which
- * a PostgreSQL text column cannot hold, so every provider stores the same messages. A position and a content key are
- * at most {@value #MAX_POSITION_BYTES} and {@value #MAX_CONTENT_KEY_BYTES} bytes in UTF-8: every provider refuses a
- * longer one when the message is published, with {@link IllegalArgumentException}, and writes nothing of the call.
+ * a PostgreSQL text column cannot hold, so every provider stores the same messages. How long a position and how large a
+ * publish call may be is configured by the application ({@link io.descoped.rawdata.api.spi.RawdataLimits}): every
+ * provider refuses a call over the limits when it is published, with {@link IllegalArgumentException}, and writes
+ * nothing of it.
  */
 public sealed interface RawdataMessage permits RawdataDefaultMessage {
-
-    /**
-     * The longest position, in UTF-8 bytes, that a provider publishes; the same in every provider.
-     */
-    int MAX_POSITION_BYTES = 2000;
-
-    /**
-     * The longest content key, in UTF-8 bytes, that a provider publishes; the same in every provider.
-     */
-    int MAX_CONTENT_KEY_BYTES = 2000;
 
     /**
      * Creates a builder for a new message.
@@ -102,6 +93,14 @@ public sealed interface RawdataMessage permits RawdataDefaultMessage {
      * @return a copy of the content, or null if the message has no such key
      */
     byte[] get(String key);
+
+    /**
+     * The length of the content for a key, without copying it.
+     *
+     * @param key the content key
+     * @return the length in bytes, or -1 if the message has no such key
+     */
+    int length(String key);
 
     /**
      * All content, by key, in the order the keys were added.

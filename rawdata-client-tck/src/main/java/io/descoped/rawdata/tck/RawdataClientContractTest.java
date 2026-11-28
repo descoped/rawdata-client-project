@@ -12,6 +12,7 @@ import io.descoped.rawdata.api.RawdataMetadataClient;
 import io.descoped.rawdata.api.RawdataNoSuchPositionException;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataWriterConflictException;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -929,6 +931,19 @@ public abstract class RawdataClientContractTest {
     }
 
     /**
+     * The metadata of a topic never written is empty: keys are none, get finds nothing, remove does nothing, and none
+     * of them makes the topic exist.
+     */
+    @Test
+    public void metadataOfATopicNeverWrittenIsEmpty() {
+        RawdataMetadataClient metadata = client.metadata(topic);
+        metadata.remove("missing");
+        assertEquals(Set.of(), metadata.keys());
+        assertNull(metadata.get("missing"));
+        assertNull(client.lastMessage(topic));
+    }
+
+    /**
      * Metadata values are copied in and out.
      */
     @Test
@@ -987,35 +1002,97 @@ public abstract class RawdataClientContractTest {
     }
 
     /**
-     * A position and a content key at the limit ({@link RawdataMessage#MAX_POSITION_BYTES},
-     * {@link RawdataMessage#MAX_CONTENT_KEY_BYTES}) are stored and read back, also when they do not compress; one byte
-     * longer is refused with IllegalArgumentException when published, and nothing of the call is written. The same in
-     * every provider.
+     * The configured limits ({@link RawdataLimits}) hold the same in every provider: a position and a publish call
+     * exactly at their limits are published, one byte more is refused with IllegalArgumentException, synchronously or
+     * through the future, and nothing of a refused call is written.
      *
      * @throws Exception on failure
      */
     @Test
-    public void aPositionOrContentKeyOverTheLimitIsRefused() throws Exception {
-        String position = incompressible(RawdataMessage.MAX_POSITION_BYTES);
-        String key = incompressible(RawdataMessage.MAX_CONTENT_KEY_BYTES - 1) + "k";
-        try (RawdataProducer producer = client.producer(topic)) {
-            producer.publish(RawdataMessage.builder().position(position).put(key, new byte[]{1}).build());
-            RawdataMessage good = RawdataMessage.builder().position("good").put("k", new byte[]{2}).build();
-            RawdataMessage longPosition = RawdataMessage.builder().position(position + "x").build();
-            RawdataMessage longKey = RawdataMessage.builder().position("p").put(key + "x", new byte[]{3}).build();
-            assertThrows(IllegalArgumentException.class, () -> producer.publish(good, longPosition));
-            assertThrows(IllegalArgumentException.class, () -> producer.publish(good, longKey));
-            ExecutionException async = assertThrows(ExecutionException.class,
-                    () -> producer.publishAsync(good, longKey).get(30, TimeUnit.SECONDS));
-            assertInstanceOf(IllegalArgumentException.class, async.getCause());
+    public void theConfiguredLimitsAreTheSameInEveryProvider() throws Exception {
+        Map<String, String> limited = withLimits(configuration(), 100, 1000);
+        String position = incompressible(100);
+        RawdataMessage atPositionLimit = RawdataMessage.builder().position(position).build();
+        RawdataMessage overPositionLimit = RawdataMessage.builder().position(position + "x").build();
+        // position "p" and key "k" are 1 byte each: 998 bytes of content make a call of exactly 1000
+        RawdataMessage atPublishLimit = RawdataMessage.builder().position("p").put("k", new byte[998]).build();
+        RawdataMessage oneByte = RawdataMessage.builder().position("q").build();
+        try (RawdataClient limitedClient = RawdataClient.create(limited)) {
+            try (RawdataProducer producer = limitedClient.producer(topic)) {
+                producer.publish(atPositionLimit);
+                producer.publish(atPublishLimit);
+                assertThrows(IllegalArgumentException.class, () -> producer.publish(oneByte, overPositionLimit));
+                assertThrows(IllegalArgumentException.class, () -> producer.publish(atPublishLimit, oneByte));
+                ExecutionException async = assertThrows(ExecutionException.class,
+                        () -> producer.publishAsync(atPublishLimit, oneByte).get(30, TimeUnit.SECONDS));
+                assertInstanceOf(IllegalArgumentException.class, async.getCause());
+            }
+            awaitPublished(limitedClient, topic);
+            try (RawdataConsumer consumer = limitedClient.consumer(topic)) {
+                List<? extends RawdataMessage> read = consumer.receiveUpTo(10, Duration.ofSeconds(5));
+                assertEquals(List.of(position, "p"), read.stream().map(RawdataMessage::position).toList(),
+                        "nothing of a refused call is written");
+            }
         }
-        awaitPublished(client, topic);
-        try (RawdataConsumer consumer = client.consumer(topic)) {
-            List<? extends RawdataMessage> read = consumer.receiveUpTo(10, Duration.ofSeconds(5));
-            assertEquals(1, read.size(), "nothing of a refused call is written");
-            assertEquals(position, read.get(0).position());
-            assertArrayEquals(new byte[]{1}, read.get(0).get(key));
+    }
+
+    /**
+     * Limits out of range, or not whole numbers, are refused when the client is created, in every provider.
+     */
+    @Test
+    public void invalidLimitsAreRefusedWhenTheClientIsCreated() {
+        int ceiling = RawdataLimits.MAX_PUBLISH_BYTES_CEILING;
+        assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(withLimits(configuration(), 100, ceiling + 1)).close());
+        assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(withLimits(configuration(), 0, 1000)).close());
+        assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(withLimits(configuration(), 1001, 1000)).close());
+        Map<String, String> notANumber = new HashMap<>(configuration());
+        notANumber.put(RawdataLimits.MAX_POSITION_BYTES, "2 KiB");
+        assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(notANumber).close());
+        try (RawdataClient atTheCeiling = RawdataClient.create(withLimits(configuration(), ceiling, ceiling))) {
+            assertNull(atTheCeiling.lastMessage(topic));
         }
+    }
+
+    /**
+     * A long position and a long content key that do not compress, as ids or cursors from a source system may be, are
+     * stored, read back and found by a seek in every provider: no store limits them below the configured limits.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    public void aLongPositionAndContentKeyAreStoredAndFound() throws Exception {
+        int length = 64 * 1024;
+        Map<String, String> limited = withLimits(configuration(), length, RawdataLimits.DEFAULT_MAX_PUBLISH_BYTES);
+        String position = incompressible(length);
+        String key = incompressible(length - 1) + "k";
+        long before = System.currentTimeMillis();
+        try (RawdataClient limitedClient = RawdataClient.create(limited)) {
+            try (RawdataProducer producer = limitedClient.producer(topic)) {
+                producer.publish(message("first"));
+                producer.publish(RawdataMessage.builder().position(position).put(key, new byte[]{1}).build());
+                producer.publish(message("last"));
+            }
+            awaitPublished(limitedClient, topic);
+            try (RawdataConsumer consumer = limitedClient.consumer(topic)) {
+                List<? extends RawdataMessage> read = consumer.receiveUpTo(10, Duration.ofSeconds(5));
+                assertEquals(3, read.size());
+                assertEquals(position, read.get(1).position());
+                assertEquals(Set.of(key), read.get(1).keys());
+                assertArrayEquals(new byte[]{1}, read.get(1).get(key));
+            }
+            try (RawdataConsumer consumer = limitedClient.consumer(topic,
+                    limitedClient.cursorOf(topic, position, true, before, Duration.ofMinutes(5)))) {
+                assertEquals(position, consumer.receive(5, TimeUnit.SECONDS).position());
+                assertEquals("last", consumer.receive(5, TimeUnit.SECONDS).position());
+            }
+        }
+    }
+
+    private static Map<String, String> withLimits(Map<String, String> configuration, int maxPositionBytes, int maxPublishBytes) {
+        Map<String, String> limited = new HashMap<>(configuration);
+        limited.put(RawdataLimits.MAX_POSITION_BYTES, Integer.toString(maxPositionBytes));
+        limited.put(RawdataLimits.MAX_PUBLISH_BYTES, Integer.toString(maxPublishBytes));
+        return limited;
     }
 
     /**

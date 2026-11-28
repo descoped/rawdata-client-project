@@ -68,16 +68,17 @@ and writes nothing. The providers do it in two ways.
 ### `postgres`: an advisory lock per topic
 
 `PostgresRawdataProducer` writes a publish in one transaction:
-1. It takes `pg_advisory_xact_lock(TOPIC_LOCK, hashtext(topic))`, a lock per topic that PostgreSQL releases at commit
-   or rollback.
-2. It reads the topic's last id from `rawdata_message`. If this client wrote the topic before and the last id is not
+1. At the topic's first write it creates the topic's tables, in a transaction of its own. Then it takes
+   `pg_advisory_xact_lock(TOPIC_LOCK, n)`, with the topic's number `n` in the schema's registry, a lock per topic that
+   PostgreSQL releases at commit or rollback.
+2. It reads the topic's last id from its message table. If this client wrote the topic before and the last id is not
    the last it wrote, another process wrote: the publish throws `RawdataWriterConflictException` and rolls back.
 3. `withIds` gives the new messages ids after that id.
-4. It inserts them into `rawdata_message` and `rawdata_content` and commits.
+4. It inserts them into the topic's message and content tables and commits.
 
 Producers of one client take turns per topic, so they never look like another writer to each other. Connections run
 at READ COMMITTED, so the read in step 2 sees every earlier commit. The topic is always a bind parameter, never part
-of the SQL.
+of the SQL: a topic's tables are named by its number.
 
 The consumer (`PostgresRawdataConsumer`) reads in pages of `prefetch-size` after the last id it has read, and polls
 when it finds nothing.
@@ -143,7 +144,7 @@ Consumers are pulled: `receive`, `receiveUpTo` and `receiveAsync`. There is no `
 ## Metadata
 
 Each topic has a small key-value store (`RawdataMetadataClient`):
-- **postgres:** rows in `rawdata_metadata`;
+- **postgres:** rows in the topic's metadata table, `rawdata_<n>_metadata`;
 - **Avro engine:** one file or object per key, named `k` plus the hex of the key's UTF-8 bytes, so any key makes a
   safe name.
 

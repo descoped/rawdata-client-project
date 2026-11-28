@@ -57,17 +57,42 @@
   cause.
 - Docs: asynchronous publishes are not ordered against each other, and each call uses a thread of the client until it
   completes; a resume that overlaps the target topic is safe (the module doc said it threw).
-- **Limits are the same in every provider** (Ove, 2026-11-27), the smallest every store holds, so a topic copies
-  between any two providers. The API checks them before anything is written:
-  - a position or content key is at most 2000 bytes in UTF-8 (`RawdataMessage.MAX_POSITION_BYTES`,
-    `MAX_CONTENT_KEY_BYTES`), refused with `IllegalArgumentException` when the message is published (in every
-    producer, through `spi.RawdataLimits.requirePublishable`), so stored messages are read whatever their length.
-    Before, postgres alone failed on about 2.7 KB, with a raw SQL error, and only for a value that did not compress;
-  - a metadata key is at most 127 bytes (`RawdataMetadataClient.MAX_KEY_BYTES`, renamed from `PORTABLE_KEY_BYTES`),
+- **Limits are the same in every provider, and the application configures them** (Ove, 2026-11-27 and 2026-11-28).
+  The API checks them before anything is written, in every producer, through `spi.RawdataLimits`:
+  - `rawdata.limits.max-position-bytes` (default 2000) bounds a position in UTF-8, and
+    `rawdata.limits.max-publish-bytes` (default 256 MiB, at most 512 MiB) everything one publish call carries: the
+    UTF-8 bytes of each message's position, ordering group and content keys, and its values' lengths. A call over a
+    limit is refused with `IllegalArgumentException` when it is published, so stored messages are read whatever their
+    size; limits out of range are refused when the client is created. One call is what a provider writes at once and
+    a reader holds in memory, so the call is limited, not each message. Before, nothing bounded a call, and postgres
+    alone failed on a position or content key of about 2.7 KB, with a raw SQL error, and only for a value that did
+    not compress. A topic copies to another store if the target's limits are at least the source's.
+  - A content key has no limit of its own; it counts toward the publish limit.
+  - A metadata key is at most 127 bytes (`RawdataMetadataClient.MAX_KEY_BYTES`, renamed from `PORTABLE_KEY_BYTES`),
     checked by `requireValidKey`. Before, postgres took 2000, gcs and s3 about 500 and memory any length.
-  The TCK's `metadataKeyLimit` hook is removed: a provider declares no limits of its own. TCK tests
-  `aPositionOrContentKeyOverTheLimitIsRefused` and `aMetadataKeyOverTheLimitIsRefused` check them in every provider
-  with values that do not compress.
+  - SPI: `OrderedRawdataProducer(String, RawdataLimits)` replaces `OrderedRawdataProducer(String)`, and
+    `AvroRawdataClient` takes the limits too. `RawdataMessage.length(String)` gives a value's length without a copy.
+  - TCK: the `metadataKeyLimit` hook is removed, so a provider declares no limits of its own. New tests:
+    `theConfiguredLimitsAreTheSameInEveryProvider`, `invalidLimitsAreRefusedWhenTheClientIsCreated`,
+    `aLongPositionAndContentKeyAreStoredAndFound` (64 KiB, incompressible, found by a seek),
+    `metadataOfATopicNeverWrittenIsEmpty`, and `aMetadataKeyOverTheLimitIsRefused`.
+- **postgres: each topic has tables of its own**, as in 2.x, so topics of different sensitivity never share a table
+  and can be granted apart (Ove, 2026-11-28). The new layout, in the schema `postgres.schema` names (default `public`):
+  - `rawdata_topic`, the registry: a topic and its number `n`. A topic's tables are `rawdata_<n>_message`,
+    `rawdata_<n>_content` and `rawdata_<n>_metadata`, named by the number, never by the topic, which stays a bind
+    parameter. They are created at the topic's first write (a publish or a metadata `put`) in one transaction, and
+    never dropped; reading a topic not written yet creates nothing and needs no `CREATE`. 2.x's dangers are gone:
+    no `DROP`, no race on creation, no half-created topic, no names cut to 63 bytes, no SQL from topic names.
+  - The position is stored as it is, and indexed by its hash, `hashtextextended(position, 0)`, which PostgreSQL
+    computes in a stored generated column; a seek compares the full position too. No position length is too long
+    for the index, and it works where MD5 is disabled (FIPS). `rawdata_probe` stops a client from starting if the
+    server's hash ever differs from the stored ones (after a `pg_upgrade`), naming the statements that recompute them.
+  - A publish's lock is keyed by the topic's number: two topics of one schema never wait on each other.
+  - Requirements: a writer needs `USAGE, CREATE` on the schema; a reader `USAGE` and `SELECT` (default privileges for
+    the writer's tables). A logical replica or change-data-capture feed needs each new topic's tables created too.
+  - **Data written by 3.1 and earlier** is in the shared tables `rawdata_message`, `rawdata_content` and
+    `rawdata_metadata`, which this version neither reads nor drops. Move it with the copy tool, through `filesystem`:
+    `rawdata-copy` 3.1.0 from postgres to a folder, then this version's from the folder into postgres.
 - postgres: a publish that waited for its turn while its producer closed writes nothing and throws
   `RawdataClosedException`; a publish under way when the client closes is reported as `RawdataClosedException` (it
   was a plain `RawdataException`) and writes nothing.

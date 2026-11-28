@@ -100,7 +100,8 @@ durable the moment `publish` returns, or when you want to look at the data with 
    }
    ```
 
-   The first client creates the tables if they are missing. Nothing else needs setting up in the database.
+   The first client creates the schema's registry of topics if it is missing, and a topic gets its tables at its first
+   write. Nothing else needs setting up in the database.
 
 The rest of this page explains what happens underneath, so you can reason about order, failures and capacity.
 
@@ -109,31 +110,57 @@ The rest of this page explains what happens underneath, so you can reason about 
 The API's concepts (topics, messages, ids, positions, cursors, metadata, one writer per topic) are explained in
 [concepts](../concepts.md). This section covers what the `postgres` provider adds to them.
 
-### Topics are rows, not tables
+### Each topic has tables of its own
 
-All topics share three tables. The topic name is a column, and every statement passes it as a bind parameter; it is
-never part of the SQL text. Creating a topic creates nothing in the database: a topic exists from its first use, and
-an unknown topic is empty. You can have any number of topics without schema changes, and a topic name cannot inject
-SQL. (The tests publish to a topic named `Robert.DROP-TABLE_students` and check that the schema still has exactly
-three tables.)
+Each topic has three tables of its own. Topics of different sensitivity, public register data next to tax reports,
+never share a table, so each can be granted on its own, and a large topic never weighs on the others. A topic's tables
+are created in one transaction at its first write (a publish or a metadata `put`), and nothing is ever dropped.
+Reading a topic that has not been written yet finds nothing and creates nothing.
+
+A topic's tables are named by its number `n` in the schema's registry, `rawdata_topic`, never by the topic name. The
+topic is only ever a bind parameter, so a topic name cannot inject SQL, is never cut to PostgreSQL's 63-byte
+identifiers, and two names never meet in one table. (The tests publish to a topic named `Robert.DROP-TABLE_students`
+and check that its tables are `rawdata_1_*`.)
 
 | Table | One row per | Primary key | Also |
 |---|---|---|---|
-| `rawdata_message` | message: id, position, ordering group, sequence number | `(topic, id)` | index `rawdata_message_position` on `(topic, position)` |
-| `rawdata_content` | named content of a message, with its `ordinal` (the order the keys were added) | `(topic, id, ordinal)` | unique `(topic, id, name)`; foreign key to `rawdata_message`, `ON DELETE CASCADE` |
-| `rawdata_metadata` | metadata entry of a topic | `(topic, name)` | |
+| `rawdata_topic` | topic of the schema, with its number `n` | `topic` | `n` unique, generated |
+| `rawdata_probe` | the word `rawdata-probe` and its hash | `word` | guards the position hash, see [the position's hash](#the-positions-hash) |
+| `rawdata_<n>_message` | message: id, position, the position's hash, ordering group, sequence number | `id` | index `rawdata_<n>_position` on `(position_hash, id)` |
+| `rawdata_<n>_content` | named content of a message, with its `ordinal` (the order the keys were added) | `(id, ordinal)` | foreign key to the message table, `ON DELETE CASCADE` |
+| `rawdata_<n>_metadata` | metadata entry of the topic | `name` | |
 
-The columns, as [`PostgresSchema`][PostgresSchema.java]
-creates them:
+The columns, as [`PostgresSchema`][PostgresSchema.java] and [`PostgresTopics`][PostgresTopics.java] create them:
 
 ```sql
-rawdata_message  (topic varchar(100), id uuid, position varchar, ordering_group varchar, sequence_number bigint)
-rawdata_content  (topic varchar(100), id uuid, ordinal integer, name varchar, data bytea)
-rawdata_metadata (topic varchar(100), name varchar, data bytea)
+rawdata_topic        (topic varchar(100) COLLATE "C", n integer GENERATED ALWAYS AS IDENTITY)
+rawdata_probe        (word text COLLATE "C", hash bigint GENERATED ALWAYS AS (hashtextextended(word, 0)) STORED)
+rawdata_<n>_message  (id uuid, position varchar COLLATE "C",
+                      position_hash bigint GENERATED ALWAYS AS (hashtextextended(position, 0)) STORED,
+                      ordering_group varchar, sequence_number bigint)
+rawdata_<n>_content  (id uuid, ordinal integer, name varchar, data bytea)
+rawdata_<n>_metadata (name varchar COLLATE "C", data bytea)
 ```
 
-`topic` is `varchar(100)` because a topic name is at most 100 characters (`RawdataTopics`). Every column is
-`NOT NULL` except `ordering_group`.
+Every column is `NOT NULL` except `ordering_group`. The tables are in the schema `postgres.schema` names (`public` by
+default); one schema per class of data keeps their grants apart (see [privileges](#database-setup-and-privileges)).
+
+### The position's hash
+
+A seek by position is a search for a value of any length, which no btree entry holds (PostgreSQL limits one to
+2704 bytes). The position is therefore stored as it is, and searched through its hash: `position_hash` is
+`hashtextextended(position, 0)`, a 64-bit hash that PostgreSQL computes when a row is inserted, kept in a stored
+generated column and indexed with the id. The client computes nothing. A seek compares the full position as well, so
+two positions with the same hash never match each other. `COLLATE "C"` makes both the hash and the comparison depend on
+the bytes alone, never on a collation library.
+
+`hashtextextended` is PostgreSQL's own hash, the one behind hash indexes and hash partitioning: it works where MD5 is
+disabled (FIPS mode). It is not a documented function, so a major version could in principle hash differently. A
+restore (`pg_dump`) recomputes stored generated columns; only `pg_upgrade` keeps them, and would then leave hashes a
+seek no longer finds. `rawdata_probe` keeps a word and its hash in the same kind of column, so it is recomputed and kept
+exactly when the topics' hashes are. Every client start compares it with the server's hash of the word, and a
+mismatch stops the start with the statements that recompute the hashes (see
+[troubleshooting](#failure-modes-and-troubleshooting)).
 
 ### Ids are PostgreSQL UUIDv7s
 
@@ -144,14 +171,15 @@ message was published. PostgreSQL sorts `uuid` as an unsigned 128-bit number, wh
 
 ### The topic lock
 
-A publish takes a PostgreSQL advisory lock for its topic, `pg_advisory_xact_lock(class, hashtext(topic))`, and holds
-it until its transaction commits or rolls back. The lock is what orders writes: while one publish holds it, no other
-publish to that topic, from any client or process, can read the topic's end or insert. Advisory locks are taken
-through SQL and need no privilege beyond connecting.
+A publish takes a PostgreSQL advisory lock for its topic, `pg_advisory_xact_lock(0x52445044, n)` with the topic's
+number `n`, and holds it until its transaction commits or rolls back. The lock is what orders writes: while one publish
+holds it, no other publish to that topic, from any client or process, can read the topic's end or insert. Advisory
+locks are taken through SQL and need no privilege beyond connecting.
 
-Two lock classes are used, `0x52445043` ("RDPC") for creating the tables and `0x52445044` for topics. A topic's lock
-key is `hashtext(topic)`, a 32-bit hash, so two topics may share a key. That makes their publishes take turns; it
-never changes what either topic holds.
+The class `0x52445043` ("RDPC") is taken for creating the registry (key 0) and for creating a topic (key
+`hashtext(schema.topic)`), so clients that create the same thing at once wait for each other. Two topics of one schema
+never share a publish lock. Advisory locks belong to the database, so topics with the same number in two schemas of
+one database share a key: their publishes take turns, which never changes what either topic holds.
 
 ### Writes are visible when `publish` returns
 
@@ -195,10 +223,18 @@ and calls `initialize`:
    `ApplicationName=rawdata-postgres`. Creating the pool opens a first connection: a database that cannot be
    reached, a database that does not exist, or a wrong password fails here with `RawdataException`, never later as
    an empty topic.
-3. It creates the schema if needed. It checks with `to_regclass` whether the three tables and the position index all
-   exist. If they do, it creates nothing. If any is missing, it takes the schema advisory lock and runs
-   `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` for all of them in one transaction. Clients that
-   start at the same time wait for each other on the lock, so the tables are created once.
+3. It checks that the schema `postgres.schema` exists, and fails with `RawdataException` if it does not.
+4. It creates the registry if needed. It checks with `to_regclass` whether `rawdata_topic` and `rawdata_probe` exist.
+   If they do, it creates nothing, so a role that may only read can start. If not, it takes the registry lock and
+   creates both in one transaction. Clients that start at the same time wait for each other on the lock, so they are
+   created once.
+5. It checks the probe: the stored hash of `rawdata-probe` must be the server's (see
+   [the position's hash](#the-positions-hash)).
+
+A topic's tables are created at its first write, by [`PostgresTopics`][PostgresTopics.java], in one transaction: take
+the topic's creation lock, look the topic up again (another client may have created it meanwhile), insert it into
+`rawdata_topic` to get its number, and create its three tables and the position index. A failure rolls all of it back.
+The client remembers each topic it has found.
 
 ### A publish
 
@@ -209,15 +245,16 @@ sequenceDiagram
     participant DB as PostgreSQL
     P->>C: publish(messages)
     C->>C: lock topic (in process)
+    C->>DB: at the topic's first write: create it (own transaction)
     C->>DB: BEGIN (READ COMMITTED)
-    C->>DB: SELECT pg_advisory_xact_lock(0x52445044, hashtext(topic))
-    C->>DB: SELECT id ... WHERE topic = ? ORDER BY id DESC LIMIT 1
+    C->>DB: SELECT pg_advisory_xact_lock(0x52445044, n)
+    C->>DB: SELECT id FROM rawdata_<n>_message ORDER BY id DESC LIMIT 1
     alt last id is not the last this client wrote
         C->>DB: ROLLBACK
         C-->>P: RawdataWriterConflictException
     else in order
         C->>C: give ids after the last id, check given ids
-        C->>DB: INSERT rawdata_message (batch), INSERT rawdata_content (batch)
+        C->>DB: INSERT rawdata_<n>_message (batch), INSERT rawdata_<n>_content (batch)
         C->>DB: COMMIT (releases the advisory lock)
         C->>C: remember the new last id
         C-->>P: return
@@ -226,14 +263,15 @@ sequenceDiagram
 
 In words, [`PostgresRawdataProducer.write`][PostgresRawdataProducer.java]:
 
-1. Take the client's in-process lock for the topic.
+1. Take the client's in-process lock for the topic. At the topic's first write, create it.
 2. Begin a transaction and take the topic's advisory lock. If another publish holds it, wait.
 3. Read the topic's last id (or the beginning of time for an empty topic).
 4. Run the one-writer check.
 5. Give each message without an id the next id after the greatest so far (`RawdataIds.next`). A message with an id
    of its own, as the copy tool gives, keeps it, in any order; a message already stored under its id is left out
    (the same message again is a no-op), and a different one fails the call with `RawdataDuplicateIdException`.
-6. Insert one `rawdata_message` row per message and one `rawdata_content` row per content key, as two JDBC batches.
+6. Insert one message row per message and one content row per content key, as two JDBC batches. PostgreSQL computes
+   each position's hash.
 7. Commit, which releases the advisory lock, and remember the last id written.
 
 Any failure in steps 2 to 7 rolls the transaction back: the call is written whole or not at all. The tests publish a
@@ -292,31 +330,35 @@ Where a consumer starts:
 | `client.consumer(topic, position, approxTimestamp, tolerance)` | after the first message with that position, searched in the time window (see below) |
 | `consumer.seek(timestamp)` | the first message whose id's time is at or after `timestamp` |
 
-`cursorOf(topic, position, inclusive, approxTimestamp, tolerance)` is one query on the `(topic, position)` index,
-limited to ids whose time is in `[approxTimestamp - tolerance, approxTimestamp + tolerance]`. It returns the first
+`cursorOf(topic, position, inclusive, approxTimestamp, tolerance)` is one query on the `(position_hash, id)` index,
+comparing the full position too, limited to ids whose time is in
+`[approxTimestamp - tolerance, approxTimestamp + tolerance]`. It returns the first
 such message by id, or throws `RawdataNoSuchPositionException`. A cursor from one `postgres` client works with any
 `postgres` client; a cursor from another provider is refused with `IllegalArgumentException`.
 
-`lastMessage(topic)` is one query for the greatest id with its content, or null for an empty topic.
+`lastMessage(topic)` is one query for the greatest id with its content, or null for an empty topic. A topic not
+written yet reads as empty everywhere: a consumer finds nothing and looks the topic up again at its next poll,
+`lastMessage` returns null, and a seek by position throws `RawdataNoSuchPositionException`.
 
 ### Metadata
 
 [`PostgresRawdataMetadataClient`][PostgresRawdataMetadataClient.java]
-keeps each entry as a row of `rawdata_metadata`. Each call is its own transaction:
+keeps each entry as a row of the topic's metadata table. Each call is its own transaction:
 
-| Call | SQL |
-|---|---|
-| `keys()` | `SELECT name ... ORDER BY name`: a sorted, unmodifiable snapshot |
-| `get(key)` | `SELECT data ...`, or null |
-| `put(key, value)` | `INSERT ... ON CONFLICT (topic, name) DO UPDATE` |
-| `remove(key)` | `DELETE ...`; nothing happens for a missing key |
+| Call | SQL | Topic not written yet |
+|---|---|---|
+| `keys()` | `SELECT name ... ORDER BY name`: a sorted, unmodifiable snapshot | an empty set |
+| `get(key)` | `SELECT data ...`, or null; read when called, never cached | null |
+| `put(key, value)` | `INSERT ... ON CONFLICT (name) DO UPDATE` | creates the topic first |
+| `remove(key)` | `DELETE ...`; nothing happens for a missing key | nothing happens |
 
 Metadata writes do not take the topic lock and are not part of the one-writer check.
 
-**Limits.** A PostgreSQL btree index entry holds somewhat less than a third of a page (about 2700 bytes for 8 kB
-pages), and the metadata key, the position and the content key are in btree indexes. The API's limits, the same in
-every provider, stay below that: a metadata key of at most 127 bytes in UTF-8, a position and a content key of at
-most 2000. A longer one is refused with `IllegalArgumentException` before the database sees it.
+**Limits.** The limits are the API's, the same in every provider: a metadata key of at most 127 bytes in UTF-8, well
+within a btree entry, and a position and a publish call as configured by `rawdata.limits.max-position-bytes` and
+`rawdata.limits.max-publish-bytes` (see [concepts](../concepts.md)). Nothing in the tables limits a position or a
+content key further: a position is indexed by its hash, and a content key is not indexed. A call over a limit is
+refused with `IllegalArgumentException` before the database sees it.
 
 ### Closing
 
@@ -340,6 +382,8 @@ Pass these keys in the map given to `RawdataClient.create`. The whole map goes t
 | `postgres.driver.password` | none, required | the role's password |
 | `postgres.driver.database` | none, required | database name; it must exist |
 | `postgres.driver.max-pool-size` | `10` | most connections the client's pool opens; a positive whole number |
+| `postgres.schema` | `public` | the schema of the client's topics: a-z, 0-9 and `_`, at most 63, not starting with a digit. It must exist. One schema per class of data keeps their grants apart |
+| `rawdata.limits.max-position-bytes`, `rawdata.limits.max-publish-bytes` | `2000`, 256 MiB | the limits of a publish, the same keys in every provider (see [concepts](../concepts.md)) |
 | `rawdata.postgres.consumer.prefetch-size` | `100` | most messages a consumer reads per query; a positive whole number |
 | `rawdata.postgres.consumer.prefetch-poll-interval-when-empty` | `250` | milliseconds a consumer that found nothing waits before it queries again; a positive whole number |
 | `rawdata.postgres.consumer.wake-on-publish` | `true` | whether a publish wakes the same client's waiting consumers of the topic, which then query at once; `true` or `false` |
@@ -350,7 +394,7 @@ Pass these keys in the map given to `RawdataClient.create`. The whole map goes t
 
 Fixed settings, not configurable: auto-commit off, READ COMMITTED, `ApplicationName=rawdata-postgres`, pool name
 `rawdata-postgres`, and HikariCP's defaults for everything else (for example, a caller waits at most 30 seconds for
-a free connection). The tables go in the role's default schema, the first schema on its `search_path` that exists.
+a free connection). Every statement names the schema; the role's `search_path` plays no part.
 
 Choosing values:
 
@@ -378,32 +422,44 @@ With the [copy tool](rawdata-copy-util.md), prefix the keys with `source.` or `t
 
 ## Database setup and privileges
 
-The provider needs a database and a role. What the role may do decides who creates the tables:
+The provider needs a database, a schema and roles. Put topics of different sensitivity in different schemas, each
+with its own roles; `postgres.schema` picks one per client.
 
-| The role may | Then |
+| A role needs | To |
 |---|---|
-| create tables in its default schema (`CREATE` on the schema, for example as the schema's owner) | the first client creates the tables |
-| only `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the three tables, and `USAGE` on the schema | it can run a client once the tables exist; create them first with a role that may |
+| `USAGE` and `CREATE` on the schema | write: create the registry (the first client) and a topic's tables (its first write) |
+| `USAGE` on the schema, `SELECT` on its tables | read: consume, `lastMessage`, seek, metadata `keys` and `get` |
 
 Since PostgreSQL 15, ordinary roles may no longer create tables in the `public` schema, and
-`GRANT ALL ON DATABASE` does not change that. The simplest setup is a database owned by the application's role,
-which then owns `public` too:
+`GRANT ALL ON DATABASE` does not change that. A schema per class of data, owned by its writer:
 
 ```sql
-CREATE USER rdc WITH PASSWORD 'rdc';
-CREATE DATABASE rdc OWNER rdc;
+CREATE ROLE tax_writer LOGIN PASSWORD '…';
+CREATE ROLE tax_reader LOGIN PASSWORD '…';
+CREATE SCHEMA rawdata_tax AUTHORIZATION tax_writer;
+GRANT USAGE ON SCHEMA rawdata_tax TO tax_reader;
+ALTER DEFAULT PRIVILEGES FOR ROLE tax_writer IN SCHEMA rawdata_tax GRANT SELECT ON TABLES TO tax_reader;
 ```
 
-For a role that only reads and writes, after the tables exist (as the tests do):
+Default privileges cover only the tables the named role creates, so one role writes all topics of a schema, and the
+reader gets every new topic's tables without further grants. If an administrator creates the registry instead, they
+also grant `SELECT` on `rawdata_topic` and `rawdata_probe` to the reader, and `SELECT, INSERT` on `rawdata_topic` to the
+writer. A role without `CREATE` that writes a new topic fails with a `RawdataException` naming the grant it lacks;
+reading a topic not written yet needs no `CREATE`.
 
-```sql
-GRANT USAGE ON SCHEMA public TO rdc_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON rawdata_message, rawdata_content, rawdata_metadata TO rdc_app;
-```
+**Logical replication** does not replicate DDL. A logical replica, a change-data-capture feed, or the target of a
+blue/green upgrade needs each new topic's tables created there too. Physical replication, point-in-time recovery and
+`pg_dump` carry them.
 
-The provider checks that the tables exist before it creates anything, because `CREATE TABLE IF NOT EXISTS` needs the
-`CREATE` privilege even when the table is there. If only some of them exist (or the index is missing), it tries to
-create the rest, which needs `CREATE`.
+### Data written by 3.1 and earlier
+
+Up to 3.1.0 the provider kept all topics in three shared tables, `rawdata_message`, `rawdata_content` and
+`rawdata_metadata`. This version neither reads nor drops them; their names do not collide with the new ones. Move
+their topics with the copy tool in two steps, through the `filesystem` provider, whose layout has not changed:
+
+1. `rawdata-copy` 3.1.0 (`rawdata-copy-3.1.0.zip` on the GitHub release) copies each topic from postgres to a
+   folder;
+2. this version's `rawdata-copy` copies it from the folder into postgres.
 
 ### The local database
 
@@ -418,11 +474,12 @@ The data lives in the volume `rdcpostgres-test`, mounted at `/var/lib/postgresql
 keeps it). The image runs the init script only when the volume is empty. `docker compose down` keeps the data;
 `docker compose down -v` deletes it, and the next `up` starts afresh.
 
-To look at a topic from `psql`:
+To look at a topic from `psql`, find its number, then read its table:
 
 ```sql
+SELECT n FROM rawdata_topic WHERE topic = 'invoices';   -- say 3
 SELECT id, uuid_extract_timestamp(id) AS written, position, ordering_group, sequence_number
-FROM rawdata_message WHERE topic = 'invoices' ORDER BY id;
+FROM rawdata_3_message ORDER BY id;
 ```
 
 ## Failure modes and troubleshooting
@@ -439,10 +496,14 @@ to the original exception as suppressed, never in its place.
 | `IllegalArgumentException: Missing configuration 'postgres.driver.user'` | a required key is blank | give it a value |
 | `IllegalArgumentException: Configuration '…' must be a positive number` | a number key is 0, negative or not a number | fix the value |
 | `RawdataException: PostgreSQL: …` from `RawdataClient.create` | the server cannot be reached, the database does not exist, or the login failed | check host, port, database, user and password; the cause has pgjdbc's message |
-| `RawdataException` from `create` mentioning `permission denied` | the tables are missing and the role may not create them | create the tables once with a role that may, then grant the role `SELECT, INSERT, UPDATE, DELETE` (see [privileges](#database-setup-and-privileges)) |
+| `RawdataException: PostgreSQL schema '…' does not exist` from `create` | `postgres.schema` names a schema that is not there | create it, or fix the name |
+| `RawdataException` from `create` mentioning `permission denied` | the registry is missing and the role may not create it, or the role may not read it | create it once with the writer, and grant the reader (see [privileges](#database-setup-and-privileges)) |
+| `RawdataException: PostgreSQL role may not create the tables of topic …` from a publish or metadata `put` | the topic is new and the role lacks `CREATE` on the schema | write with the schema's writer, or grant `USAGE, CREATE` |
+| `RawdataException: PostgreSQL hashes positions differently …` from `create` | the server's `hashtextextended` differs from the one the stored hashes were made with (after `pg_upgrade` to a version that changed it) | run the statements in the message: `UPDATE rawdata_<n>_message SET position = position` for each topic, then `UPDATE rawdata_probe SET word = word` |
 | `RawdataWriterConflictException` from `publish` | another process wrote the topic since this client last did | see below |
 | `RawdataDuplicateIdException` from `publish` | a given id is taken in the topic, or earlier in the call, by a message with another position, ordering or content | give no id, or unique ids |
-| `IllegalArgumentException`: "at most 127 bytes in UTF-8" from a metadata call, or "at most 2000 bytes" from a publish | a metadata key, a position or a content key is over the limit of every provider | use a shorter one |
+| `IllegalArgumentException`: "at most 127 bytes in UTF-8" from a metadata call | a metadata key is over the limit of every provider | use a shorter one |
+| `IllegalArgumentException`: "A position is at most …" or "A publish call carries at most …" from a publish | a position or a call is over the configured limits | split the call, or raise `rawdata.limits.*` |
 | `RawdataException` after about 30 seconds, mentioning a connection timeout | all `max-pool-size` connections were busy | raise `max-pool-size`, or use fewer concurrent consumers per client |
 | A consumer sees new messages late | it polls every `prefetch-poll-interval-when-empty` ms | lower the interval |
 | `RawdataException: PostgreSQL failed to publish to topic … (SQLState 55P03)` | another holder kept the topic lock, or a lock the publish needs, longer than `lock-timeout-ms` | nothing was written: retry; if it persists, find the holder in `pg_locks` (often another process writing the topic) |
@@ -461,11 +522,11 @@ next publish to the topic then finds an id it did not record and reports a confl
 no recorded id to compare with: the next publish appends, so check `lastMessage` before you publish the same
 messages again.)
 
-**Mind the topic lock in your own SQL.** Anything that takes `pg_advisory_xact_lock(0x52445044, hashtext(topic))`, or
+**Mind the topic lock in your own SQL.** Anything that takes `pg_advisory_xact_lock(0x52445044, n)` for a topic's `n`, or
 holds a session lock on the same key, stops every publish to that topic until it lets go. Nothing in the provider
 does this outside a publish.
 
-**Deleting data by hand.** The API never deletes messages. If you delete rows from `rawdata_message` with SQL, their
+**Deleting data by hand.** The API never deletes messages. If you delete rows from a topic's message table with SQL, their
 content rows go with them (`ON DELETE CASCADE`). Deleting the topic's last messages while a client writes it makes
 that client's next publish report a conflict, since the end it remembers is gone.
 
@@ -488,8 +549,12 @@ and each test uses topics of its own. They run on the class path, where the prov
 - [`PostgresProviderTest`][PostgresProviderTest.java]
   checks what the contract cannot see: stored ids are PostgreSQL UUIDv7s; PostgreSQL orders ids as `RawdataIds.ORDER`
   does; a publish waiting for the topic lock reads the holder's commit even when the role defaults to REPEATABLE
-  READ; a role without `CREATE` can use existing tables; eight clients starting together create the schema once; a
-  failed publish writes no message and no content; topics are rows, not tables; missing configuration is reported;
+  READ; a reader reads what the writer created, needs no `CREATE` to read a topic not written yet, and is told the
+  grant it lacks to create one; the schema must exist and be a plain name; schemas keep their topics apart; eight
+  clients starting and creating one topic together create the registry and the topic once; a failed creation leaves
+  nothing behind; a seek uses the position's hash and the position is stored raw; a changed hash function stops the
+  client from starting; a failed publish writes no message and no content; a topic's tables are named by its number,
+  never by the topic; missing configuration is reported;
   closing a client closes its connections; a publish that waited for its turn writes nothing once its producer
   closed, and one under way when the client closes is reported closed and writes nothing; a database failure names
   the operation and the SQLState; a publish wakes the client's waiting consumers unless configured off; a publish
@@ -524,9 +589,8 @@ Run them with:
   ```
 
   `PostgreSQLContainer` is `org.testcontainers.postgresql.PostgreSQLContainer` from
-  `org.testcontainers:testcontainers-postgresql` (Testcontainers 2). Because every topic shares the same tables,
-  give each test its own topic names (for example with a random suffix) rather than cleaning the database between
-  tests.
+  `org.testcontainers:testcontainers-postgresql` (Testcontainers 2). Give each test its own topic names (for example
+  with a random suffix), or its own schema (`postgres.schema`), rather than cleaning the database between tests.
 
 ## Reference
 
@@ -539,10 +603,11 @@ here so you can read them.
 | [`PostgresRawdataClient`][PostgresRawdataClient.java] | the `RawdataClient`: owns the pool, the thread pool, the per-topic in-process locks and the last id written per topic |
 | [`PostgresRawdataProducer`][PostgresRawdataProducer.java] | extends `OrderedRawdataProducer`; `write` does the locked, checked publish |
 | [`PostgresRawdataConsumer`][PostgresRawdataConsumer.java] | extends `PollingRawdataConsumer`; `fill` reads the next page, `reposition` serves `seek` |
-| [`PostgresRawdataMetadataClient`][PostgresRawdataMetadataClient.java] | `RawdataMetadataClient` on `rawdata_metadata` |
+| [`PostgresRawdataMetadataClient`][PostgresRawdataMetadataClient.java] | `RawdataMetadataClient` on the topic's metadata table |
+| [`PostgresTopics`][PostgresTopics.java] | the registry: finds a topic's number and creates a topic's tables in one transaction |
 | [`PostgresCursor`][PostgresCursor.java] | the `RawdataCursor`: an id and whether it is inclusive |
 | [`PostgresMessages`][PostgresMessages.java] | the SQL that reads and writes messages and their content |
-| [`PostgresSchema`][PostgresSchema.java] | the DDL, the advisory lock classes (`SCHEMA_LOCK`, `TOPIC_LOCK`) and the create-if-missing logic |
+| [`PostgresSchema`][PostgresSchema.java] | the configured schema, the registry and the probe, and the advisory lock classes (`SCHEMA_LOCK`, `TOPIC_LOCK`) |
 | [`Jdbc`][Jdbc.java] | runs work in one transaction on a pooled connection: commit on return, rollback on failure |
 | [`module-info.java`][module-info.java] | `requires java.sql`, `com.zaxxer.hikari`, `org.postgresql.jdbc` (pgjdbc, an automatic module), `io.descoped.rawdata.api`; `provides RawdataClientInitializer` |
 
@@ -580,4 +645,5 @@ The API methods the provider implements, with their real signatures, are on the
 [PostgresRawdataMetadataClient.java]: ../../rawdata-client-provider-postgres/src/main/java/io/descoped/rawdata/provider/postgres/PostgresRawdataMetadataClient.java
 [PostgresRawdataProducer.java]: ../../rawdata-client-provider-postgres/src/main/java/io/descoped/rawdata/provider/postgres/PostgresRawdataProducer.java
 [PostgresSchema.java]: ../../rawdata-client-provider-postgres/src/main/java/io/descoped/rawdata/provider/postgres/PostgresSchema.java
+[PostgresTopics.java]: ../../rawdata-client-provider-postgres/src/main/java/io/descoped/rawdata/provider/postgres/PostgresTopics.java
 [module-info.java]: ../../rawdata-client-provider-postgres/src/main/java/module-info.java

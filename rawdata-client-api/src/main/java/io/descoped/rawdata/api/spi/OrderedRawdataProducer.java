@@ -22,15 +22,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public abstract class OrderedRawdataProducer implements RawdataProducer {
 
     private final String topic;
+    private final RawdataLimits limits;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     /**
      * Creates the producer.
      *
-     * @param topic the topic
+     * @param topic  the topic
+     * @param limits the client's limits, which every publish is checked against before anything is written
      */
-    protected OrderedRawdataProducer(String topic) {
+    protected OrderedRawdataProducer(String topic, RawdataLimits limits) {
         this.topic = topic;
+        this.limits = Objects.requireNonNull(limits, "limits");
     }
 
     /**
@@ -69,7 +72,7 @@ public abstract class OrderedRawdataProducer implements RawdataProducer {
 
     @Override
     public final void publish(RawdataMessage... messages) throws RawdataClosedException {
-        RawdataLimits.requirePublishable(messages);
+        limits.requirePublishable(messages);
         checkOpen();
         if (messages.length > 0) {
             write(messages.clone());

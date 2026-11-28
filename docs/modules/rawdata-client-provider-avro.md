@@ -86,7 +86,8 @@ public RawdataClient initialize(Map<String, String> configuration) {
     String bucket = AvroConfiguration.required(configuration, "mystore.bucket");
     long pollInterval = AvroConfiguration.pollIntervalMillis(configuration, "mystore.listing.min-interval-seconds", 1);
     AvroUploadWindow window = AvroUploadWindow.of(configuration); // local-temp-folder and the avro-file.* keys
-    return new AvroRawdataClient(new MyAvroStore(bucket), window, pollInterval);
+    RawdataLimits limits = RawdataLimits.of(configuration);       // rawdata.limits.*, the same in every provider
+    return new AvroRawdataClient(new MyAvroStore(bucket), window, limits, pollInterval);
 }
 ```
 

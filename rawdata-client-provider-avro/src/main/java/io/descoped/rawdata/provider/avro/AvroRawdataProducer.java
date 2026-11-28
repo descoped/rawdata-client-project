@@ -3,6 +3,7 @@ package io.descoped.rawdata.provider.avro;
 import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.RawdataWriterConflictException;
 import io.descoped.rawdata.api.spi.OrderedRawdataProducer;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 
 import java.util.IdentityHashMap;
 import java.util.Map;
@@ -20,8 +21,8 @@ final class AvroRawdataProducer extends OrderedRawdataProducer {
 
     private final AvroRawdataClient client;
 
-    AvroRawdataProducer(AvroRawdataClient client, String topic) {
-        super(topic);
+    AvroRawdataProducer(AvroRawdataClient client, String topic, RawdataLimits limits) {
+        super(topic, limits);
         this.client = client;
     }
 

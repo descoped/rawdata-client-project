@@ -271,9 +271,9 @@ of a shared store. A typical entry is a consumer's checkpoint, the id of the las
 
 A key is any string without NUL, the empty string included, and case matters, of at most
 `RawdataMetadataClient.MAX_KEY_BYTES` (127) bytes of UTF-8 in every provider; a longer one is refused with
-`IllegalArgumentException`. A position and a content key are at most `RawdataMessage.MAX_POSITION_BYTES` and
-`MAX_CONTENT_KEY_BYTES` (2000) bytes, checked when a message is published, in every provider. See the
-[contract](../contract.md).
+`IllegalArgumentException`. A position and a publish call are at most the configured limits
+(`spi.RawdataLimits`: `rawdata.limits.max-position-bytes`, default 2000 bytes, and `rawdata.limits.max-publish-bytes`,
+default 256 MiB), checked when a call is published, in every provider. See the [contract](../contract.md).
 
 ### Closed state
 
@@ -452,7 +452,7 @@ module pages.
 
 | Exception | Thrown when |
 |---|---|
-| `IllegalArgumentException` | an invalid topic name; a given id that is not a UUIDv7; a NUL in a position, ordering group, content key or metadata key; a position or content key over 2000 bytes, or a metadata key over 127, in UTF-8; a cursor from another provider; `maxMessages` below 1 or a negative timeout; a missing `rawdata.client.provider` or a missing required provider key |
+| `IllegalArgumentException` | an invalid topic name; a given id that is not a UUIDv7; a NUL in a position, ordering group, content key or metadata key; a position or publish call over the configured limits, or a metadata key over 127 bytes in UTF-8; limits out of range; a cursor from another provider; `maxMessages` below 1 or a negative timeout; a missing `rawdata.client.provider` or a missing required provider key |
 | `NullPointerException` | a null topic, key, value, payload, message or configuration map |
 | `RawdataException` | the base of the failures below; also a store that does not exist or fails |
 | `RawdataClosedException` | any use of a client, producer, consumer or metadata client after it, or its client, was closed |
@@ -623,6 +623,7 @@ interface implemented only by the package-private `RawdataDefaultMessage`.
 | `long timestamp()` | milliseconds from the id; `NullPointerException` without an id |
 | `String orderingGroup()`, `long sequenceNumber()`, `String position()` | |
 | `Set<String> keys()`, `byte[] get(String key)`, `Map<String, byte[]> data()` | content, copied out |
+| `int length(String key)` | the length of a key's content without copying it, or -1 |
 
 | Builder member | |
 |---|---|
@@ -720,7 +721,7 @@ with `RawdataClosedException`).
 
 | Member | |
 |---|---|
-| `protected OrderedRawdataProducer(String topic)` | |
+| `protected OrderedRawdataProducer(String topic, RawdataLimits limits)` | every publish is checked against the client's limits before `write` |
 | `protected abstract void write(RawdataMessage[] batch)` | write the call, all or none, after everything in the topic |
 | `protected final List<RawdataMessage> withIds(RawdataMessage[] batch, UUID last)` | assigns ids after `last` and keeps given ones |
 | `protected abstract boolean isClientClosed()` | |
@@ -758,6 +759,15 @@ range of time, for `cursorOf` by position.
 |---|---|
 | `public static IdRange around(long approxTimestamp, Duration tolerance)` | `[approxTimestamp - tolerance, approxTimestamp + tolerance]` by the millisecond, cut to the times an id holds; a negative tolerance: `IllegalArgumentException` |
 | `UUID from()`, `UUID to()` | the first id in the range, and the first after it |
+
+[`RawdataLimits`](../../rawdata-client-api/src/main/java/io/descoped/rawdata/api/spi/RawdataLimits.java): the limits
+of a publish, configured by the application and the same in every provider.
+
+| Member | |
+|---|---|
+| `public static RawdataLimits of(Map<String, String> configuration)` | reads `rawdata.limits.max-position-bytes` (default 2000) and `rawdata.limits.max-publish-bytes` (default 256 MiB, at most `MAX_PUBLISH_BYTES_CEILING`, 512 MiB); a value out of range or not a whole number: `IllegalArgumentException` naming the key |
+| `public void requirePublishable(RawdataMessage... messages)` | refuses a null array or message (`NullPointerException`), a position over the limit, or a call carrying more than the publish limit: the UTF-8 bytes of each message's position, ordering group and content keys, and its values' lengths (`IllegalArgumentException`) |
+| `DEFAULT` | the limits when none are configured |
 
 See [writing a provider](../writing-a-provider.md) for how to use them.
 

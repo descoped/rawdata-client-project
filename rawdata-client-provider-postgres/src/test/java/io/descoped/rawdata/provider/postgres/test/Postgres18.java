@@ -43,6 +43,19 @@ final class Postgres18 {
         return configuration;
     }
 
+    /**
+     * The configuration of a client in a schema of its own, created here, so a test sees only its own registry.
+     */
+    static Map<String, String> configurationInNewSchema() throws SQLException {
+        String schema = "t_" + java.util.UUID.randomUUID().toString().replace("-", "");
+        try (Connection connection = connect(); java.sql.Statement statement = connection.createStatement()) {
+            statement.execute("CREATE SCHEMA " + schema);
+        }
+        Map<String, String> configuration = configuration();
+        configuration.put("postgres.schema", schema);
+        return configuration;
+    }
+
     static Connection connect() throws SQLException {
         return DriverManager.getConnection(CONTAINER.getJdbcUrl(), CONTAINER.getUsername(), CONTAINER.getPassword());
     }

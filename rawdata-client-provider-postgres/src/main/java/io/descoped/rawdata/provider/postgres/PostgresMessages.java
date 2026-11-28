@@ -14,39 +14,20 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Reads and writes messages: one row in {@code rawdata_message} and one row per content key in
- * {@code rawdata_content}.
+ * Reads and writes the messages of a topic: one row in its message table and one row per content key in its content
+ * table. The tables are named by the registry ({@link PostgresTopics.Topic}), never after the topic.
  */
 final class PostgresMessages {
 
     private static final String COLUMNS = "SELECT m.id, m.position, m.ordering_group, m.sequence_number, c.name, c.data FROM (";
-    private static final String CONTENT = ") m LEFT JOIN rawdata_content c ON c.topic = ? AND c.id = m.id ";
+    private static final String MESSAGE = "SELECT id, position, ordering_group, sequence_number FROM ";
     private static final String IN_ORDER = "ORDER BY m.id, c.ordinal";
 
-    /**
-     * The messages after (or from) an id, in order.
-     */
-    static final String AFTER_SQL = COLUMNS
-            + "SELECT id, position, ordering_group, sequence_number FROM rawdata_message WHERE topic = ? AND id > ? ORDER BY id LIMIT ?"
-            + CONTENT + IN_ORDER;
-    static final String FROM_SQL = COLUMNS
-            + "SELECT id, position, ordering_group, sequence_number FROM rawdata_message WHERE topic = ? AND id >= ? ORDER BY id LIMIT ?"
-            + CONTENT + IN_ORDER;
-    /**
-     * The message with the greatest id.
-     */
-    static final String LAST_SQL = COLUMNS
-            + "SELECT id, position, ordering_group, sequence_number FROM rawdata_message WHERE topic = ? ORDER BY id DESC LIMIT 1"
-            + CONTENT + "ORDER BY c.ordinal";
-
-    /**
-     * The messages with the given ids.
-     */
-    static final String WITH_IDS_SQL = COLUMNS
-            + "SELECT id, position, ordering_group, sequence_number FROM rawdata_message WHERE topic = ? AND id = ANY (?)"
-            + CONTENT + IN_ORDER;
-
     private PostgresMessages() {
+    }
+
+    private static String withContent(PostgresTopics.Topic topic, String messages, String order) {
+        return COLUMNS + messages + ") m LEFT JOIN " + topic.content() + " c ON c.id = m.id " + order;
     }
 
     /**
@@ -58,70 +39,83 @@ final class PostgresMessages {
      * @return the messages still to write, in the batch's order
      * @throws RawdataDuplicateIdException if a message differs from the one stored, or given earlier, under its id
      */
-    static List<RawdataMessage> notStored(Connection connection, String topic, List<RawdataMessage> messages) throws SQLException {
-        Map<UUID, RawdataMessage> fresh = RawdataDuplicates.distinct(topic, messages);
-        try (PreparedStatement select = connection.prepareStatement(WITH_IDS_SQL)) {
-            select.setString(1, topic);
-            select.setArray(2, connection.createArrayOf("uuid", fresh.keySet().toArray()));
-            select.setString(3, topic);
+    static List<RawdataMessage> notStored(Connection connection, PostgresTopics.Topic topic, List<RawdataMessage> messages)
+            throws SQLException {
+        Map<UUID, RawdataMessage> fresh = RawdataDuplicates.distinct(topic.name(), messages);
+        try (PreparedStatement select = connection.prepareStatement(
+                withContent(topic, MESSAGE + topic.message() + " WHERE id = ANY (?)", IN_ORDER))) {
+            select.setArray(1, connection.createArrayOf("uuid", fresh.keySet().toArray()));
             for (RawdataMessage stored : read(select)) {
                 if (!RawdataDuplicates.same(stored, fresh.remove(stored.id()))) {
-                    throw new RawdataDuplicateIdException(topic, stored.id());
+                    throw new RawdataDuplicateIdException(topic.name(), stored.id());
                 }
             }
         }
         return new ArrayList<>(fresh.values());
     }
 
-    static List<RawdataMessage> after(Connection connection, String topic, UUID id, boolean inclusive, int limit) throws SQLException {
-        try (PreparedStatement select = connection.prepareStatement(inclusive ? FROM_SQL : AFTER_SQL)) {
-            select.setString(1, topic);
-            select.setObject(2, id);
-            select.setInt(3, limit);
-            select.setString(4, topic);
+    static List<RawdataMessage> after(Connection connection, PostgresTopics.Topic topic, UUID id, boolean inclusive, int limit)
+            throws SQLException {
+        String from = inclusive ? " WHERE id >= ?" : " WHERE id > ?";
+        try (PreparedStatement select = connection.prepareStatement(
+                withContent(topic, MESSAGE + topic.message() + from + " ORDER BY id LIMIT ?", IN_ORDER))) {
+            select.setObject(1, id);
+            select.setInt(2, limit);
             return read(select);
         }
     }
 
-    static RawdataMessage last(Connection connection, String topic) throws SQLException {
-        try (PreparedStatement select = connection.prepareStatement(LAST_SQL)) {
-            select.setString(1, topic);
-            select.setString(2, topic);
+    static RawdataMessage last(Connection connection, PostgresTopics.Topic topic) throws SQLException {
+        try (PreparedStatement select = connection.prepareStatement(
+                withContent(topic, MESSAGE + topic.message() + " ORDER BY id DESC LIMIT 1", "ORDER BY c.ordinal"))) {
             List<RawdataMessage> messages = read(select);
             return messages.isEmpty() ? null : messages.get(0);
         }
     }
 
-    static UUID lastId(Connection connection, String topic) throws SQLException {
+    static UUID lastId(Connection connection, PostgresTopics.Topic topic) throws SQLException {
         try (PreparedStatement select = connection.prepareStatement(
-                "SELECT id FROM rawdata_message WHERE topic = ? ORDER BY id DESC LIMIT 1")) {
-            select.setString(1, topic);
+                "SELECT id FROM " + topic.message() + " ORDER BY id DESC LIMIT 1");
+             ResultSet rows = select.executeQuery()) {
+            return rows.next() ? rows.getObject(1, UUID.class) : null;
+        }
+    }
+
+    /**
+     * The first message at a position within a range of ids, found through the index on the position's hash, which
+     * PostgreSQL computes; the full position is compared too, so a hash collision never matches.
+     */
+    static UUID atPosition(Connection connection, PostgresTopics.Topic topic, String position, UUID from, UUID to) throws SQLException {
+        try (PreparedStatement select = connection.prepareStatement("SELECT id FROM " + topic.message()
+                + " WHERE position_hash = hashtextextended(?::text COLLATE \"C\", 0) AND position = ? AND id >= ? AND id < ? ORDER BY id LIMIT 1")) {
+            select.setString(1, position);
+            select.setString(2, position);
+            select.setObject(3, from);
+            select.setObject(4, to);
             try (ResultSet rows = select.executeQuery()) {
                 return rows.next() ? rows.getObject(1, UUID.class) : null;
             }
         }
     }
 
-    static void insert(Connection connection, String topic, List<RawdataMessage> messages) throws SQLException {
+    static void insert(Connection connection, PostgresTopics.Topic topic, List<RawdataMessage> messages) throws SQLException {
         try (PreparedStatement message = connection.prepareStatement(
-                "INSERT INTO rawdata_message (topic, id, position, ordering_group, sequence_number) VALUES (?, ?, ?, ?, ?)");
+                "INSERT INTO " + topic.message() + " (id, position, ordering_group, sequence_number) VALUES (?, ?, ?, ?)");
              PreparedStatement content = connection.prepareStatement(
-                     "INSERT INTO rawdata_content (topic, id, ordinal, name, data) VALUES (?, ?, ?, ?, ?)")) {
+                     "INSERT INTO " + topic.content() + " (id, ordinal, name, data) VALUES (?, ?, ?, ?)")) {
             boolean anyContent = false;
-            message.setString(1, topic); // parameters stay set between batch rows
-            content.setString(1, topic);
             for (RawdataMessage m : messages) {
-                message.setObject(2, m.id());
-                message.setString(3, m.position());
-                message.setString(4, m.orderingGroup());
-                message.setLong(5, m.sequenceNumber());
+                message.setObject(1, m.id());
+                message.setString(2, m.position());
+                message.setString(3, m.orderingGroup());
+                message.setLong(4, m.sequenceNumber());
                 message.addBatch();
                 int ordinal = 0;
                 for (String key : m.keys()) {
-                    content.setObject(2, m.id());
-                    content.setInt(3, ordinal++);
-                    content.setString(4, key);
-                    content.setBytes(5, m.get(key));
+                    content.setObject(1, m.id());
+                    content.setInt(2, ordinal++);
+                    content.setString(3, key);
+                    content.setBytes(4, m.get(key));
                     content.addBatch();
                     anyContent = true;
                 }

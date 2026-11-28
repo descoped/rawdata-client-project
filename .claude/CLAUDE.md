@@ -14,7 +14,7 @@ tool that copies topics between providers. One Maven reactor, group `io.descoped
 | `rawdata-client-bom` | n/a | BOM of the modules below |
 | `rawdata-client-api` | `io.descoped.rawdata.api` | `RawdataClient`, `RawdataClientInitializer` (the provider service, on `io.descoped.spi:service-provider-api`), the `memory` and `discard` providers, `RawdataIds` (UUIDv7), `RawdataCopy`; `io.descoped.rawdata.api.spi`: `PollingRawdataConsumer` and `OrderedRawdataProducer`, the base classes of the postgres and Avro providers |
 | `rawdata-client-tck` | `io.descoped.rawdata.tck` | the TCK: `RawdataClientContractTest`, the provider contract as abstract JUnit 6 tests (its own tests run it for `memory`), and `AvroStoreContractTest` (`io.descoped.rawdata.tck.avro`) for the Avro engine's stores; depends on the engine |
-| `rawdata-client-provider-postgres` | `io.descoped.rawdata.provider.postgres` | provider `postgres`: PostgreSQL 18 only, HikariCP, pgjdbc; shared tables `rawdata_message`, `rawdata_content`, `rawdata_metadata` keyed by topic |
+| `rawdata-client-provider-postgres` | `io.descoped.rawdata.provider.postgres` | provider `postgres`: PostgreSQL 18 only, HikariCP, pgjdbc; per topic its own tables `rawdata_<n>_message`, `_content`, `_metadata`, numbered by the registry `rawdata_topic` in the schema `postgres.schema` |
 | `rawdata-client-provider-avro` | `io.descoped.rawdata.provider.avro` | the Avro engine (`AvroRawdataClient` on an `AvroStore`) that filesystem, gcs and s3 share; not a provider; its own tests cover the upload window's failure paths |
 | `rawdata-client-provider-filesystem` | `io.descoped.rawdata.provider.filesystem` | provider `filesystem`: the Avro engine on a local folder |
 | `rawdata-client-provider-gcs` | `io.descoped.rawdata.provider.gcs` | provider `gcs`: the Avro engine on a Google Cloud Storage bucket, through GCS's JSON API on `java.net.http` with Google's OAuth 2.0 done in-house (`GcsClient`, `GcsCredentials`); no Google libraries |
@@ -61,10 +61,11 @@ this repository.
   in every provider, so providers can be swapped (owner's decision, 2026-11-18), and `RawdataClientContractTest`
   checks it; a provider is compliant only if it passes it unchanged. A behaviour test goes in the TCK, never in one
   provider's tests, which only check internals (SQL, files and objects, configuration, credentials). Stores of the
-  Avro engine also pass `AvroStoreContractTest`. Limits are the same in every provider (Ove, 2026-11-27): the
-  smallest every store holds, so a topic copies between any two; the API checks them before anything is written: a
-  position or content key at most 2000 bytes in UTF-8 (PostgreSQL's index), a metadata key at most 127 (the
-  filesystem's file name). NUL is refused in positions, ordering groups, content names and metadata keys by the API. A store that does not exist fails with `RawdataException`, never reads as empty. Topic names are
+  Avro engine also pass `AvroStoreContractTest`. Limits are the same in every provider for a given configuration (Ove, 2026-11-27, 2026-11-28),
+  and the API checks them before anything is written (`spi.RawdataLimits`): the application configures a position's
+  length and a publish call's size (`rawdata.limits.max-position-bytes`, default 2000;
+  `rawdata.limits.max-publish-bytes`, default 256 MiB, at most 512 MiB, which every store holds); a metadata key is at
+  most 127 bytes in UTF-8 (the filesystem's file name). No store limits a position or content key further. NUL is refused in positions, ordering groups, content names and metadata keys by the API. A store that does not exist fails with `RawdataException`, never reads as empty. Topic names are
   validated and never spliced into SQL, file paths or object names. One exception, by the owner's decision of
   2026-11-19 to follow 2.x: given ids are kept in any order, and where a lower id published later is read (id order
   in memory and postgres, publish order in the Avro providers) and what `lastMessage` returns depend on the provider.
@@ -98,9 +99,15 @@ this repository.
   IntelliJ's import (property `idea.maven.embedder.version`), gives its test runs the `--add-reads`/`--add-opens` they
   need through Surefire's `argLine`. Maven and CI never activate it. The root POM's empty `argLine` property keeps
   `@{argLine}` defined when JaCoCo does not set it.
-- **Postgres invariants**: the topic is a column and always a bind parameter, never SQL text; a publish holds the
-  topic's advisory lock (`pg_advisory_xact_lock`) while it reads the last id, compares it with the last this client
-  wrote (a different one is another writer), and writes; the tables are created idempotently under an advisory lock.
+- **Postgres invariants** (Ove, 2026-11-28): each topic has tables of its own, as in 2.x, so data of different
+  sensitivity never shares a table; one schema per class of data (`postgres.schema`). The registry `rawdata_topic`
+  numbers topics, and tables are named by the number, never by the topic, which is always a bind parameter, never SQL
+  text. A topic is created at its first write, in one transaction, under an advisory lock; nothing is ever dropped;
+  reading never creates. The position is stored raw and indexed by `hashtextextended(position, 0)`, computed by
+  PostgreSQL in a stored generated column, `COLLATE "C"`; the client never hashes, and `rawdata_probe` stops a start
+  if the server's hash changed. A publish holds the topic's advisory lock (`pg_advisory_xact_lock(TOPIC_LOCK, n)`)
+  while it reads the last id, compares it with the last this client wrote (a different one is another writer), and
+  writes.
 - The `filesystem`, `gcs` and `s3` tests each run the TCK (client and store contract) and the provider's own tests,
   patched into the provider on the class path: `filesystem` offline, `gcs` against a fake GCS server
   (`fsouza/fake-gcs-server`) and `s3` against S3Mock (`adobe/s3mock`), both through Testcontainers. The gcs client and

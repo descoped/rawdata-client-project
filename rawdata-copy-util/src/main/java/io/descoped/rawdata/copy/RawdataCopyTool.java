@@ -119,23 +119,25 @@ public final class RawdataCopyTool {
         }
         RawdataClient from = null;
         RawdataClient to = null;
-        int status;
+        int status = FAILED;
         try {
             from = client(configuration, "source.");
             to = client(configuration, "target.");
             status = copyAll(from, to, RawdataLimits.of(part(configuration, "target.")), options, out, err);
         } catch (UncheckedConfigurationException e) {
-            err.println(PREFIX + describe(e)); // the arguments were right; the store could not be opened
+            // the arguments were right; the store could not be opened
+            err.println(PREFIX + e.getMessage() + causes(e));
             status = USAGE;
         } catch (IllegalArgumentException e) {
-            status = usage(err, describe(e));
+            status = usage(err, e.getMessage());
+        } finally {
+            // each client is closed apart, the target first: closing it uploads its open windows, so a failure there
+            // fails the run, and never keeps the source from being closed
+            if (!close(to, "target", err) && status == OK) {
+                status = FAILED;
+            }
+            close(from, "source", err);
         }
-        // each client is closed apart, the target first: closing it uploads its open windows, so a failure there fails
-        // the run, and never keeps the source from being closed
-        if (!close(to, "target", err) && status == OK) {
-            status = FAILED;
-        }
-        close(from, "source", err);
         return status;
     }
 
@@ -258,7 +260,7 @@ public final class RawdataCopyTool {
     }
 
     /**
-     * A failure for the error line: its type and message, then its causes and suppressed failures, each on a line.
+     * A failure for the error line: its type and message, then its suppressed failures and causes, each on a line.
      */
     static String describe(Throwable failure) {
         StringBuilder text = new StringBuilder();
@@ -266,18 +268,33 @@ public final class RawdataCopyTool {
         return text.toString();
     }
 
+    /**
+     * The causes of a failure whose own message is already printed, each on a line.
+     */
+    private static String causes(Throwable failure) {
+        StringBuilder text = new StringBuilder();
+        Map<Throwable, Boolean> seen = new IdentityHashMap<>();
+        seen.put(failure, Boolean.TRUE);
+        related(failure, "", text, seen);
+        return text.toString();
+    }
+
     private static void describe(Throwable failure, String indent, StringBuilder text, Map<Throwable, Boolean> seen) {
-        if (seen.put(failure, Boolean.TRUE) != null) {
-            return;
-        }
+        seen.put(failure, Boolean.TRUE);
         String message = failure.getMessage();
         text.append(failure.getClass().getSimpleName()).append(message == null ? "" : ": " + message);
+        related(failure, indent, text, seen);
+    }
+
+    private static void related(Throwable failure, String indent, StringBuilder text, Map<Throwable, Boolean> seen) {
         for (Throwable suppressed : failure.getSuppressed()) {
-            text.append(System.lineSeparator()).append(indent).append("  suppressed: ");
-            describe(suppressed, indent + "  ", text, seen);
+            if (!seen.containsKey(suppressed)) {
+                text.append(System.lineSeparator()).append(indent).append("  suppressed: ");
+                describe(suppressed, indent + "  ", text, seen);
+            }
         }
         Throwable cause = failure.getCause();
-        if (cause != null && cause != failure) {
+        if (cause != null && !seen.containsKey(cause)) {
             text.append(System.lineSeparator()).append(indent).append("  caused by: ");
             describe(cause, indent + "  ", text, seen);
         }

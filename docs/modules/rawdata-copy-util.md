@@ -240,8 +240,9 @@ Step by step, for each run:
    usage text, since the arguments were right.
 4. **Per topic.** For each topic in the order given:
    1. The target's producer is opened, then the target topic's last message is read: with a producer, it includes
-      windows a killed earlier run left in the upload buffer, which the producer uploads. The start rule in the table above picks where the source consumer
-      starts: exclusively after the target's last id, inclusively at a start point, or at the beginning.
+      windows a killed earlier run left in the upload buffer, which the producer uploads. The start rule in the table
+      above picks where the source consumer starts: exclusively after the target's last id, inclusively at a start
+      point, or at the beginning.
    2. `RawdataCopy.copy(consumer, producer, batchSize, targetLimits, idleTimeout)` pulls batches with `receiveUpTo`
       and publishes each with the source ids, in calls that fit the target's publish limit, until a receive returns
       nothing within the idle timeout.
@@ -254,10 +255,10 @@ Step by step, for each run:
    the target (its uploads did not finish) is printed and makes the exit status 1; a failure to close the source is
    printed only.
 
-The first failure ends the run. The error goes to standard error as
-`rawdata-copy: <source> -> <target>: copy failed; run again to continue: <exception>`, and the topics after it are not
-tried. Topics before it are complete. In the failed topic, every batch that was published is in the target (or in the
-target's upload buffer, see below), and the next run continues after it.
+The first failure ends the run. The error goes to standard error as `rawdata-copy: <source> -> <target>: copy failed;
+run again to continue: <type>: <message>`, followed by an indented `caused by:` or `suppressed:` line for each cause and
+suppressed failure; the topics after it are not tried. Topics before it are complete. In the failed topic, every batch
+that was published is in the target (or in the target's upload buffer, see below), and the next run continues after it.
 
 ### The report line
 

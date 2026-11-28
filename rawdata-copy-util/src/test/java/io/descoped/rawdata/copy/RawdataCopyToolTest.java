@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -250,6 +251,8 @@ class RawdataCopyToolTest {
         Path unknown = config(Map.of(RawdataClient.PROVIDER_KEY, "no-such-provider"), filesystem("target"));
         assertEquals(RawdataCopyTool.USAGE, run("--config", unknown.toString(), "a"));
         assertTrue(err().contains("Cannot open the source store"), err());
+        assertFalse(err().contains("Usage: rawdata-copy"), "the arguments were right: " + err());
+        assertFalse(err().contains("UncheckedConfigurationException"), err());
         Path incomplete = config(filesystem("source"), Map.of(RawdataClient.PROVIDER_KEY, "postgres"));
         assertEquals(RawdataCopyTool.USAGE, run("--config", incomplete.toString(), "a"));
         assertTrue(err().contains("Cannot open the target store"), err());
@@ -330,6 +333,36 @@ class RawdataCopyToolTest {
         assertEquals("a -> a: 3 messages from " + later + "\n", out().replace(System.lineSeparator(), "\n"),
                 "a start point after the target's last id wins");
         assertEquals(List.of("m2", "m7", "m8", "m9"), read(fresh, "a").stream().map(RawdataMessage::position).toList());
+    }
+
+    /**
+     * A run killed while its last window was still in the target's upload buffer: the next run's producer uploads
+     * that window, and the copy resumes after it, so the report counts only what this run copied.
+     */
+    @Test
+    void aRunAfterAKilledOneResumesAfterTheWindowItLeft() throws Exception {
+        Map<String, String> source = filesystem("source");
+        Map<String, String> target = filesystem("target");
+        publish(source, "a", 0, 10);
+        List<RawdataMessage> messages = read(source, "a");
+        // the killed run: it wrote five messages to its window, which never reached the store
+        Map<String, String> killed = new LinkedHashMap<>(filesystem("killed"));
+        killed.put("avro-file.max.seconds", "3600");
+        Path killedBuffer = Path.of(killed.get("local-temp-folder"));
+        try (RawdataClient client = RawdataClient.create(killed); RawdataProducer producer = client.producer("a")) {
+            producer.publish(messages.subList(0, 5));
+            Path window;
+            try (Stream<Path> files = Files.walk(killedBuffer)) {
+                window = files.filter(file -> file.getFileName().toString().endsWith(".window.avro")).findFirst().orElseThrow();
+            }
+            Path left = Path.of(target.get("local-temp-folder")).resolve(killedBuffer.relativize(window));
+            Files.createDirectories(left.getParent());
+            Files.copy(window, left); // the window as the disk holds it, in the target's upload buffer
+        }
+        assertEquals(RawdataCopyTool.OK, run("--config", config(source, target).toString(), "--idle-timeout-ms", "100", "a"), err());
+        assertEquals("a -> a: 5 messages after " + messages.get(4).id() + "\n", out().replace(System.lineSeparator(), "\n"));
+        assertEquals(messages.stream().map(RawdataMessage::position).toList(),
+                read(target, "a").stream().map(RawdataMessage::position).toList(), "each message once, in order");
     }
 
     /**

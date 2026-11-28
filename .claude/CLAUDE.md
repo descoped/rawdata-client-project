@@ -107,7 +107,9 @@ this repository.
   PostgreSQL in a stored generated column, `COLLATE "C"`; the client never hashes, and `rawdata_probe` stops a start
   if the server's hash changed. A publish holds the topic's advisory lock (`pg_advisory_xact_lock(TOPIC_LOCK, n)`)
   while it reads the last id, compares it with the last this client wrote (a different one is another writer), and
-  writes.
+  writes. 3.1's shared tables are moved only with `postgres.migrate-3.1=true` (Ove, 2026-11-28): fenced by renaming
+  to `rawdata_v31_*`, kept, one transaction per topic, resumable; without the key a client refuses to start on 3.1
+  data not moved.
 - The `filesystem`, `gcs` and `s3` tests each run the TCK (client and store contract) and the provider's own tests,
   patched into the provider on the class path: `filesystem` offline, `gcs` against a fake GCS server
   (`fsouza/fake-gcs-server`) and `s3` against S3Mock (`adobe/s3mock`), both through Testcontainers. The gcs client and

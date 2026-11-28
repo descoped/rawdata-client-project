@@ -69,25 +69,7 @@ final class PostgresTopics {
             return jdbc.transaction("create topic " + topic, connection -> {
                 PostgresSchema.lock(connection, schema.name() + "." + topic);
                 Topic other = find(connection, topic); // another client may have created it while this one waited
-                if (other != null) {
-                    return other;
-                }
-                int n;
-                try (PreparedStatement insert = connection.prepareStatement(schema.insertTopic())) {
-                    insert.setString(1, topic);
-                    try (ResultSet rows = insert.executeQuery()) {
-                        rows.next();
-                        n = rows.getInt(1);
-                    }
-                }
-                Topic created = new Topic(topic, n, new PostgresTopicSql(schema, n));
-                try (Statement statement = connection.createStatement()) {
-                    for (String ddl : created.sql().create) {
-                        statement.addBatch(ddl);
-                    }
-                    statement.executeBatch();
-                }
-                return created;
+                return other != null ? other : createIn(connection, topic);
             }).remember(known);
         } catch (RawdataException e) {
             if (e.getCause() instanceof SQLException sql && "42501".equals(sql.getSQLState())) {
@@ -97,6 +79,42 @@ final class PostgresTopics {
                         + schema.table("rawdata_topic") + " TO <role>", e);
             }
             throw e;
+        }
+    }
+
+    /**
+     * Registers a topic and creates its tables in the caller's transaction, which holds the topic's creation lock
+     * ({@link PostgresSchema#lock(Connection, String)}) and has found it missing. The topic is not remembered: the
+     * caller's transaction may still roll back.
+     */
+    Topic createIn(Connection connection, String topic) throws SQLException {
+        int n;
+        try (PreparedStatement insert = connection.prepareStatement(schema.insertTopic())) {
+            insert.setString(1, topic);
+            try (ResultSet rows = insert.executeQuery()) {
+                rows.next();
+                n = rows.getInt(1);
+            }
+        }
+        Topic created = new Topic(topic, n, new PostgresTopicSql(schema, n));
+        try (Statement statement = connection.createStatement()) {
+            for (String ddl : created.sql().create) {
+                statement.addBatch(ddl);
+            }
+            statement.executeBatch();
+        }
+        return created;
+    }
+
+    /**
+     * Whether a topic is in the registry, read in the caller's transaction.
+     */
+    boolean registered(Connection connection, String topic) throws SQLException {
+        try (PreparedStatement select = connection.prepareStatement(schema.findTopic())) {
+            select.setString(1, topic);
+            try (ResultSet rows = select.executeQuery()) {
+                return rows.next();
+            }
         }
     }
 

@@ -42,6 +42,8 @@ final class PostgresTopicSql {
     final String metadataPut;
     /** Removes one metadata entry. */
     final String metadataRemove;
+    /** Copies the topic's messages, content and metadata from 3.1's fenced tables, in that order; the topic is bound. */
+    final List<String> from31;
 
     PostgresTopicSql(PostgresSchema schema, int n) {
         String message = schema.table(TABLE_PREFIX + n + "_message");
@@ -80,5 +82,12 @@ final class PostgresTopicSql {
         metadataGet = "SELECT data FROM " + metadata + " WHERE name = ?";
         metadataPut = INSERT_INTO + metadata + " (name, data) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET data = EXCLUDED.data";
         metadataRemove = "DELETE FROM " + metadata + " WHERE name = ?";
+        String ofTopic = " WHERE topic = ?";
+        from31 = List.of(
+                INSERT_INTO + message + " (id, position, ordering_group, sequence_number)"
+                        + " SELECT id, position, ordering_group, sequence_number FROM " + schema.table("rawdata_v31_message") + ofTopic,
+                INSERT_INTO + content + " (id, ordinal, name, data)"
+                        + " SELECT id, ordinal, name, data FROM " + schema.table("rawdata_v31_content") + ofTopic,
+                INSERT_INTO + metadata + " (name, data) SELECT name, data FROM " + schema.table("rawdata_v31_metadata") + ofTopic);
     }
 }

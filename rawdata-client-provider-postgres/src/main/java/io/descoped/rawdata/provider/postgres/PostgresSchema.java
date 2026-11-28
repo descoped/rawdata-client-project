@@ -201,4 +201,16 @@ final class PostgresSchema {
             lock.execute();
         }
     }
+
+    /**
+     * Takes the schema's advisory lock keyed by a text's {@code hashtext} in shared mode, for the rest of the
+     * transaction: holders of the shared lock run together, and wait for, or hold off, the exclusive one.
+     */
+    static void lockShared(Connection connection, String key) throws SQLException {
+        try (PreparedStatement lock = connection.prepareStatement("SELECT pg_advisory_xact_lock_shared(?, hashtext(?))")) {
+            lock.setInt(1, SCHEMA_LOCK);
+            lock.setString(2, key);
+            lock.execute();
+        }
+    }
 }

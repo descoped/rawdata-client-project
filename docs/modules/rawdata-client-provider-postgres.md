@@ -498,7 +498,7 @@ to the original exception as suppressed, never in its place.
 | `RawdataException: PostgreSQL: …` from `RawdataClient.create` | the server cannot be reached, the database does not exist, or the login failed | check host, port, database, user and password; the cause has pgjdbc's message |
 | `RawdataException: PostgreSQL schema '…' does not exist` from `create` | `postgres.schema` names a schema that is not there | create it, or fix the name |
 | `RawdataException` from `create` mentioning `permission denied` | the registry is missing and the role may not create it, or the role may not read it | create it once with the writer, and grant the reader (see [privileges](#database-setup-and-privileges)) |
-| `RawdataException: PostgreSQL role may not create the tables of topic …` from a publish or metadata `put` | the topic is new and the role lacks `CREATE` on the schema | write with the schema's writer, or grant `USAGE, CREATE` |
+| `RawdataException: PostgreSQL role may not create topic …` from a publish or metadata `put` | the topic is new, and the role lacks `CREATE` on the schema or `INSERT` on a registry another role owns; the server's message says which | write with the schema's writer, or grant `USAGE, CREATE` on the schema (and `SELECT, INSERT` on `rawdata_topic`) |
 | `RawdataException: PostgreSQL hashes positions differently …` from `create` | the server's `hashtextextended` differs from the one the stored hashes were made with (after `pg_upgrade` to a version that changed it) | run the statements in the message: `UPDATE rawdata_<n>_message SET position = position` for each topic, then `UPDATE rawdata_probe SET word = word` |
 | `RawdataWriterConflictException` from `publish` | another process wrote the topic since this client last did | see below |
 | `RawdataDuplicateIdException` from `publish` | a given id is taken in the topic, or earlier in the call, by a message with another position, ordering or content | give no id, or unique ids |
@@ -605,6 +605,7 @@ here so you can read them.
 | [`PostgresRawdataConsumer`][PostgresRawdataConsumer.java] | extends `PollingRawdataConsumer`; `fill` reads the next page, `reposition` serves `seek` |
 | [`PostgresRawdataMetadataClient`][PostgresRawdataMetadataClient.java] | `RawdataMetadataClient` on the topic's metadata table |
 | [`PostgresTopics`][PostgresTopics.java] | the registry: finds a topic's number and creates a topic's tables in one transaction |
+| [`PostgresTopicSql`][PostgresTopicSql.java] | the SQL of one topic, built once from the schema and the topic's number |
 | [`PostgresCursor`][PostgresCursor.java] | the `RawdataCursor`: an id and whether it is inclusive |
 | [`PostgresMessages`][PostgresMessages.java] | the SQL that reads and writes messages and their content |
 | [`PostgresSchema`][PostgresSchema.java] | the configured schema, the registry and the probe, and the advisory lock classes (`SCHEMA_LOCK`, `TOPIC_LOCK`) |
@@ -646,4 +647,5 @@ The API methods the provider implements, with their real signatures, are on the
 [PostgresRawdataProducer.java]: ../../rawdata-client-provider-postgres/src/main/java/io/descoped/rawdata/provider/postgres/PostgresRawdataProducer.java
 [PostgresSchema.java]: ../../rawdata-client-provider-postgres/src/main/java/io/descoped/rawdata/provider/postgres/PostgresSchema.java
 [PostgresTopics.java]: ../../rawdata-client-provider-postgres/src/main/java/io/descoped/rawdata/provider/postgres/PostgresTopics.java
+[PostgresTopicSql.java]: ../../rawdata-client-provider-postgres/src/main/java/io/descoped/rawdata/provider/postgres/PostgresTopicSql.java
 [module-info.java]: ../../rawdata-client-provider-postgres/src/main/java/module-info.java

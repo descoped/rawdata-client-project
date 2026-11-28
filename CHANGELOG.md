@@ -61,12 +61,15 @@
   The API checks them before anything is written, in every producer, through `spi.RawdataLimits`:
   - `rawdata.limits.max-position-bytes` (default 2000) bounds a position in UTF-8, and
     `rawdata.limits.max-publish-bytes` (default 256 MiB, at most 512 MiB) everything one publish call carries: the
-    UTF-8 bytes of each message's position, ordering group and content keys, and its values' lengths. A call over a
+    sum of `RawdataLimits.size` of its messages, the UTF-8 bytes of each message's position, ordering group and
+    content keys, its values' lengths, and a fixed framing (32 bytes a message, 10 a content key). A call over a
     limit is refused with `IllegalArgumentException` when it is published, so stored messages are read whatever their
     size; limits out of range are refused when the client is created. One call is what a provider writes at once and
     a reader holds in memory, so the call is limited, not each message. Before, nothing bounded a call, and postgres
     alone failed on a position or content key of about 2.7 KB, with a raw SQL error, and only for a value that did
-    not compress. A topic copies to another store if the target's limits are at least the source's.
+    not compress. A topic copies to another store if the target's limits are at least the source's:
+    `RawdataCopy.copy` takes the target's limits (the copy tool reads them from `target.*`) and publishes each batch
+    in as many calls as fit, so a batch of large messages no longer fails the copy.
   - A content key has no limit of its own; it counts toward the publish limit.
   - A metadata key is at most 127 bytes (`RawdataMetadataClient.MAX_KEY_BYTES`, renamed from `PORTABLE_KEY_BYTES`),
     checked by `requireValidKey`. Before, postgres took 2000, gcs and s3 about 500 and memory any length.

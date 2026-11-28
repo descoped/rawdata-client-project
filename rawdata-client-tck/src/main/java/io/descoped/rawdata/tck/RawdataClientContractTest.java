@@ -1014,8 +1014,10 @@ public abstract class RawdataClientContractTest {
         String position = incompressible(100);
         RawdataMessage atPositionLimit = RawdataMessage.builder().position(position).build();
         RawdataMessage overPositionLimit = RawdataMessage.builder().position(position + "x").build();
-        // position "p" and key "k" are 1 byte each: 998 bytes of content make a call of exactly 1000
-        RawdataMessage atPublishLimit = RawdataMessage.builder().position("p").put("k", new byte[998]).build();
+        // position "p" and key "k" are 1 byte each: with the framing, this content makes a call of exactly 1000
+        int content = 1000 - 2 - RawdataLimits.MESSAGE_OVERHEAD_BYTES - RawdataLimits.CONTENT_OVERHEAD_BYTES;
+        RawdataMessage atPublishLimit = RawdataMessage.builder().position("p").put("k", new byte[content]).build();
+        assertEquals(1000, RawdataLimits.size(atPublishLimit));
         RawdataMessage oneByte = RawdataMessage.builder().position("q").build();
         try (RawdataClient limitedClient = RawdataClient.create(limited)) {
             try (RawdataProducer producer = limitedClient.producer(topic)) {
@@ -1042,13 +1044,14 @@ public abstract class RawdataClientContractTest {
     @Test
     public void invalidLimitsAreRefusedWhenTheClientIsCreated() {
         int ceiling = RawdataLimits.MAX_PUBLISH_BYTES_CEILING;
-        assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(withLimits(configuration(), 100, ceiling + 1)).close());
-        assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(withLimits(configuration(), 0, 1000)).close());
-        assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(withLimits(configuration(), 1001, 1000)).close());
+        assertRefusedAtCreation(withLimits(configuration(), 100, ceiling + 1));
+        assertRefusedAtCreation(withLimits(configuration(), 0, 1000));
+        assertRefusedAtCreation(withLimits(configuration(), 1000 - RawdataLimits.MESSAGE_OVERHEAD_BYTES + 1, 1000));
         Map<String, String> notANumber = new HashMap<>(configuration());
         notANumber.put(RawdataLimits.MAX_POSITION_BYTES, "2 KiB");
-        assertThrows(IllegalArgumentException.class, () -> RawdataClient.create(notANumber).close());
-        try (RawdataClient atTheCeiling = RawdataClient.create(withLimits(configuration(), ceiling, ceiling))) {
+        assertRefusedAtCreation(notANumber);
+        try (RawdataClient atTheCeiling = RawdataClient.create(withLimits(configuration(),
+                ceiling - RawdataLimits.MESSAGE_OVERHEAD_BYTES, ceiling))) {
             assertNull(atTheCeiling.lastMessage(topic));
         }
     }
@@ -1086,6 +1089,14 @@ public abstract class RawdataClientContractTest {
                 assertEquals("last", consumer.receive(5, TimeUnit.SECONDS).position());
             }
         }
+    }
+
+    private static void assertRefusedAtCreation(Map<String, String> configuration) {
+        assertThrows(IllegalArgumentException.class, () -> createAndClose(configuration));
+    }
+
+    private static void createAndClose(Map<String, String> configuration) {
+        RawdataClient.create(configuration).close();
     }
 
     private static Map<String, String> withLimits(Map<String, String> configuration, int maxPositionBytes, int maxPublishBytes) {

@@ -18,15 +18,13 @@ import java.util.concurrent.ConcurrentHashMap;
 final class PostgresTopics {
 
     /**
-     * A topic and its tables, qualified for SQL text.
+     * A topic, its number and its SQL.
      *
-     * @param name     the topic
-     * @param n        its number in the registry, also the second key of its publish lock
-     * @param message  its message table
-     * @param content  its content table
-     * @param metadata its metadata table
+     * @param name the topic
+     * @param n    its number in the registry, which names its tables and is the second key of its publish lock
+     * @param sql  the statements on its tables
      */
-    record Topic(String name, int n, String message, String content, String metadata) {
+    record Topic(String name, int n, PostgresTopicSql sql) {
 
         /**
          * Remembers this topic, found or created and committed, for the life of the client.
@@ -69,68 +67,49 @@ final class PostgresTopics {
         }
         try {
             return jdbc.transaction("create topic " + topic, connection -> {
-                try (PreparedStatement lock = connection.prepareStatement("SELECT pg_advisory_xact_lock(?, hashtext(?))")) {
-                    lock.setInt(1, PostgresSchema.SCHEMA_LOCK);
-                    lock.setString(2, schema.name() + "." + topic);
-                    lock.execute();
-                }
+                PostgresSchema.lock(connection, schema.name() + "." + topic);
                 Topic other = find(connection, topic); // another client may have created it while this one waited
                 if (other != null) {
                     return other;
                 }
                 int n;
-                try (PreparedStatement insert = connection.prepareStatement(
-                        "INSERT INTO " + schema.table("rawdata_topic") + " (topic) VALUES (?) RETURNING n")) {
+                try (PreparedStatement insert = connection.prepareStatement(schema.insertTopic())) {
                     insert.setString(1, topic);
                     try (ResultSet rows = insert.executeQuery()) {
                         rows.next();
                         n = rows.getInt(1);
                     }
                 }
-                Topic created = topic(topic, n);
+                Topic created = new Topic(topic, n, new PostgresTopicSql(schema, n));
                 try (Statement statement = connection.createStatement()) {
-                    // never IF NOT EXISTS: a table already there under a new number is an error, never adopted
-                    statement.addBatch("CREATE TABLE " + created.message() + " ("
-                            + "id uuid PRIMARY KEY, "
-                            + "position varchar COLLATE \"C\" NOT NULL, "
-                            + "position_hash bigint NOT NULL GENERATED ALWAYS AS (hashtextextended(position, 0)) STORED, "
-                            + "ordering_group varchar, "
-                            + "sequence_number bigint NOT NULL)");
-                    statement.addBatch("CREATE INDEX rawdata_" + n + "_position ON " + created.message() + " (position_hash, id)");
-                    statement.addBatch("CREATE TABLE " + created.content() + " ("
-                            + "id uuid NOT NULL REFERENCES " + created.message() + " (id) ON DELETE CASCADE, "
-                            + "ordinal integer NOT NULL, "
-                            + "name varchar NOT NULL, "
-                            + "data bytea NOT NULL, "
-                            + "PRIMARY KEY (id, ordinal))");
-                    statement.addBatch("CREATE TABLE " + created.metadata() + " ("
-                            + "name varchar COLLATE \"C\" PRIMARY KEY, "
-                            + "data bytea NOT NULL)");
+                    for (String ddl : created.sql().create) {
+                        statement.addBatch(ddl);
+                    }
                     statement.executeBatch();
                 }
                 return created;
             }).remember(known);
         } catch (RawdataException e) {
             if (e.getCause() instanceof SQLException sql && "42501".equals(sql.getSQLState())) {
-                throw new RawdataException("PostgreSQL role may not create the tables of topic " + topic + " in schema '"
-                        + schema.name() + "'; grant it: GRANT USAGE, CREATE ON SCHEMA " + schema.name() + " TO <role>", e);
+                throw new RawdataException("PostgreSQL role may not create topic " + topic + " in schema '" + schema.name()
+                        + "' (" + sql.getMessage() + "); a writer needs: GRANT USAGE, CREATE ON SCHEMA " + schema.name()
+                        + " TO <role>, and, if another role owns the registry: GRANT SELECT, INSERT ON "
+                        + schema.table("rawdata_topic") + " TO <role>", e);
             }
             throw e;
         }
     }
 
     private Topic find(Connection connection, String topic) throws SQLException {
-        try (PreparedStatement select = connection.prepareStatement(
-                "SELECT n FROM " + schema.table("rawdata_topic") + " WHERE topic = ?")) {
+        try (PreparedStatement select = connection.prepareStatement(schema.findTopic())) {
             select.setString(1, topic);
             try (ResultSet rows = select.executeQuery()) {
-                return rows.next() ? topic(topic, rows.getInt(1)).remember(known) : null;
+                if (!rows.next()) {
+                    return null;
+                }
+                int n = rows.getInt(1);
+                return new Topic(topic, n, new PostgresTopicSql(schema, n)).remember(known);
             }
         }
-    }
-
-    private Topic topic(String topic, int n) {
-        return new Topic(topic, n, schema.table("rawdata_" + n + "_message"), schema.table("rawdata_" + n + "_content"),
-                schema.table("rawdata_" + n + "_metadata"));
     }
 }

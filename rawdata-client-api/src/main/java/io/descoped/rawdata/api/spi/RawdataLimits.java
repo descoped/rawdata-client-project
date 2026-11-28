@@ -13,15 +13,15 @@ import java.util.Objects;
  * <ul>
  *     <li>{@value #MAX_POSITION_BYTES}: the longest position, in UTF-8 bytes (default
  *     {@value #DEFAULT_MAX_POSITION_BYTES}).</li>
- *     <li>{@value #MAX_PUBLISH_BYTES}: the most one publish call carries, in bytes: for each message the UTF-8 bytes of
- *     its position, ordering group and content keys, and the length of its values (default
- *     {@value #DEFAULT_MAX_PUBLISH_BYTES}, 256 MiB). One call is the unit a provider writes and a reader holds in
- *     memory, so the call is limited, not each message.</li>
+ *     <li>{@value #MAX_PUBLISH_BYTES}: the most one publish call carries, in bytes, the sum of its messages'
+ *     {@link #size sizes} (default {@value #DEFAULT_MAX_PUBLISH_BYTES}, 256 MiB). One call is the unit a provider
+ *     writes and a reader holds in memory, so the call is limited, not each message.</li>
  * </ul>
- * Both are at least 1, the position limit at most the publish limit, and the publish limit at most
- * {@value #MAX_PUBLISH_BYTES_CEILING} (512 MiB), which every store holds: below PostgreSQL's 1 GB field, and with an
- * upload window of at most 1 GiB, below the 2 GiB a Java array holds. A topic copies to another store only if the
- * target's limits are at least the source's.
+ * The position limit is at least 1, the publish limit holds a message with the longest position, and the publish limit
+ * is at most {@value #MAX_PUBLISH_BYTES_CEILING} (512 MiB), which every store holds: below PostgreSQL's 1 GB field, and
+ * with an upload window of at most 1 GiB, below the 2 GiB a Java array holds. A topic copies to another store only if
+ * the target's limits are at least the source's; {@link io.descoped.rawdata.api.RawdataCopy} splits its calls to fit
+ * the target's publish limit.
  *
  * @param maxPositionBytes the longest position, in UTF-8 bytes
  * @param maxPublishBytes  the most one publish call carries, in bytes
@@ -54,6 +54,17 @@ public record RawdataLimits(int maxPositionBytes, int maxPublishBytes) {
     public static final int MAX_PUBLISH_BYTES_CEILING = 512 * 1024 * 1024;
 
     /**
+     * What a message counts beyond its position, ordering group and content: its 16-byte id, its sequence number and
+     * the framing a store adds.
+     */
+    public static final int MESSAGE_OVERHEAD_BYTES = 32;
+
+    /**
+     * What each content key counts beyond its name and value: the framing a store adds.
+     */
+    public static final int CONTENT_OVERHEAD_BYTES = 10;
+
+    /**
      * The limits when none are configured.
      */
     public static final RawdataLimits DEFAULT = new RawdataLimits(DEFAULT_MAX_POSITION_BYTES, DEFAULT_MAX_PUBLISH_BYTES);
@@ -63,17 +74,19 @@ public record RawdataLimits(int maxPositionBytes, int maxPublishBytes) {
      *
      * @param maxPositionBytes the longest position, in UTF-8 bytes
      * @param maxPublishBytes  the most one publish call carries, in bytes
-     * @throws IllegalArgumentException if a limit is below 1, the position limit is above the publish limit, or the
+     * @throws IllegalArgumentException if the position limit is below 1, the publish limit cannot hold a message with
+     *                                  the longest position ({@value #MESSAGE_OVERHEAD_BYTES} bytes more), or the
      *                                  publish limit is above {@value #MAX_PUBLISH_BYTES_CEILING}
      */
     public RawdataLimits {
-        if (maxPublishBytes < 1 || maxPublishBytes > MAX_PUBLISH_BYTES_CEILING) {
-            throw new IllegalArgumentException("Configuration '" + MAX_PUBLISH_BYTES + "' must be 1 to "
+        if (maxPublishBytes > MAX_PUBLISH_BYTES_CEILING) {
+            throw new IllegalArgumentException("Configuration '" + MAX_PUBLISH_BYTES + "' must be at most "
                     + MAX_PUBLISH_BYTES_CEILING + ": " + maxPublishBytes);
         }
-        if (maxPositionBytes < 1 || maxPositionBytes > maxPublishBytes) {
-            throw new IllegalArgumentException("Configuration '" + MAX_POSITION_BYTES + "' must be 1 to '"
-                    + MAX_PUBLISH_BYTES + "' (" + maxPublishBytes + "): " + maxPositionBytes);
+        if (maxPositionBytes < 1 || (long) maxPositionBytes + MESSAGE_OVERHEAD_BYTES > maxPublishBytes) {
+            throw new IllegalArgumentException("Configuration '" + MAX_POSITION_BYTES + "' must be at least 1, and '"
+                    + MAX_PUBLISH_BYTES + "' (" + maxPublishBytes + ") must hold a message with the longest position, "
+                    + MESSAGE_OVERHEAD_BYTES + " bytes more: " + maxPositionBytes);
         }
     }
 
@@ -121,15 +134,30 @@ public record RawdataLimits(int maxPositionBytes, int maxPublishBytes) {
                 throw new IllegalArgumentException("A position is at most " + maxPositionBytes + " bytes in UTF-8 ('"
                         + MAX_POSITION_BYTES + "'): " + position);
             }
-            total += position + utf8Length(message.orderingGroup());
-            for (String key : message.keys()) {
-                total += utf8Length(key) + message.length(key);
-            }
+            total += size(message);
             if (total > maxPublishBytes) {
                 throw new IllegalArgumentException("A publish call carries at most " + maxPublishBytes + " bytes ('"
                         + MAX_PUBLISH_BYTES + "'): more in " + messages.length + " message(s)");
             }
         }
+    }
+
+    /**
+     * What a message counts toward {@link #maxPublishBytes()}: the UTF-8 bytes of its position, ordering group and
+     * content keys, the length of its values, {@value #MESSAGE_OVERHEAD_BYTES} bytes for its id, sequence number and
+     * framing, and {@value #CONTENT_OVERHEAD_BYTES} bytes of framing per content key. It bounds what a store writes
+     * for the message.
+     *
+     * @param message the message
+     * @return its size, in bytes
+     * @throws NullPointerException if the message is null
+     */
+    public static long size(RawdataMessage message) {
+        long size = MESSAGE_OVERHEAD_BYTES + utf8Length(message.position()) + utf8Length(message.orderingGroup());
+        for (String key : message.keys()) {
+            size += CONTENT_OVERHEAD_BYTES + utf8Length(key) + message.length(key);
+        }
+        return size;
     }
 
     /**
@@ -142,20 +170,18 @@ public record RawdataLimits(int maxPositionBytes, int maxPublishBytes) {
         }
         long bytes = 0;
         int length = value.length();
-        for (int i = 0; i < length; i++) {
+        int i = 0;
+        while (i < length) {
             char c = value.charAt(i);
-            if (c < 0x80) {
-                bytes += 1;
-            } else if (c < 0x800) {
-                bytes += 2;
-            } else if (Character.isHighSurrogate(c) && i + 1 < length && Character.isLowSurrogate(value.charAt(i + 1))) {
+            boolean pair = Character.isHighSurrogate(c) && i + 1 < length && Character.isLowSurrogate(value.charAt(i + 1));
+            if (pair) {
                 bytes += 4;
-                i++;
-            } else if (Character.isSurrogate(c)) {
-                bytes += 1;
+            } else if (c < 0x80 || Character.isSurrogate(c)) {
+                bytes += 1; // an unpaired surrogate is encoded as one byte
             } else {
-                bytes += 3;
+                bytes += c < 0x800 ? 2 : 3;
             }
+            i += pair ? 2 : 1;
         }
         return bytes;
     }

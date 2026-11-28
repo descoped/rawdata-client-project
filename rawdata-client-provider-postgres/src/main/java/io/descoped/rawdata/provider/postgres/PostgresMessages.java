@@ -19,15 +19,7 @@ import java.util.UUID;
  */
 final class PostgresMessages {
 
-    private static final String COLUMNS = "SELECT m.id, m.position, m.ordering_group, m.sequence_number, c.name, c.data FROM (";
-    private static final String MESSAGE = "SELECT id, position, ordering_group, sequence_number FROM ";
-    private static final String IN_ORDER = "ORDER BY m.id, c.ordinal";
-
     private PostgresMessages() {
-    }
-
-    private static String withContent(PostgresTopics.Topic topic, String messages, String order) {
-        return COLUMNS + messages + ") m LEFT JOIN " + topic.content() + " c ON c.id = m.id " + order;
     }
 
     /**
@@ -42,8 +34,7 @@ final class PostgresMessages {
     static List<RawdataMessage> notStored(Connection connection, PostgresTopics.Topic topic, List<RawdataMessage> messages)
             throws SQLException {
         Map<UUID, RawdataMessage> fresh = RawdataDuplicates.distinct(topic.name(), messages);
-        try (PreparedStatement select = connection.prepareStatement(
-                withContent(topic, MESSAGE + topic.message() + " WHERE id = ANY (?)", IN_ORDER))) {
+        try (PreparedStatement select = connection.prepareStatement(topic.sql().withIds)) {
             select.setArray(1, connection.createArrayOf("uuid", fresh.keySet().toArray()));
             for (RawdataMessage stored : read(select)) {
                 if (!RawdataDuplicates.same(stored, fresh.remove(stored.id()))) {
@@ -56,9 +47,7 @@ final class PostgresMessages {
 
     static List<RawdataMessage> after(Connection connection, PostgresTopics.Topic topic, UUID id, boolean inclusive, int limit)
             throws SQLException {
-        String from = inclusive ? " WHERE id >= ?" : " WHERE id > ?";
-        try (PreparedStatement select = connection.prepareStatement(
-                withContent(topic, MESSAGE + topic.message() + from + " ORDER BY id LIMIT ?", IN_ORDER))) {
+        try (PreparedStatement select = connection.prepareStatement(inclusive ? topic.sql().from : topic.sql().after)) {
             select.setObject(1, id);
             select.setInt(2, limit);
             return read(select);
@@ -66,16 +55,14 @@ final class PostgresMessages {
     }
 
     static RawdataMessage last(Connection connection, PostgresTopics.Topic topic) throws SQLException {
-        try (PreparedStatement select = connection.prepareStatement(
-                withContent(topic, MESSAGE + topic.message() + " ORDER BY id DESC LIMIT 1", "ORDER BY c.ordinal"))) {
+        try (PreparedStatement select = connection.prepareStatement(topic.sql().last)) {
             List<RawdataMessage> messages = read(select);
             return messages.isEmpty() ? null : messages.get(0);
         }
     }
 
     static UUID lastId(Connection connection, PostgresTopics.Topic topic) throws SQLException {
-        try (PreparedStatement select = connection.prepareStatement(
-                "SELECT id FROM " + topic.message() + " ORDER BY id DESC LIMIT 1");
+        try (PreparedStatement select = connection.prepareStatement(topic.sql().lastId);
              ResultSet rows = select.executeQuery()) {
             return rows.next() ? rows.getObject(1, UUID.class) : null;
         }
@@ -86,8 +73,7 @@ final class PostgresMessages {
      * PostgreSQL computes; the full position is compared too, so a hash collision never matches.
      */
     static UUID atPosition(Connection connection, PostgresTopics.Topic topic, String position, UUID from, UUID to) throws SQLException {
-        try (PreparedStatement select = connection.prepareStatement("SELECT id FROM " + topic.message()
-                + " WHERE position_hash = hashtextextended(?::text COLLATE \"C\", 0) AND position = ? AND id >= ? AND id < ? ORDER BY id LIMIT 1")) {
+        try (PreparedStatement select = connection.prepareStatement(topic.sql().atPosition)) {
             select.setString(1, position);
             select.setString(2, position);
             select.setObject(3, from);
@@ -99,10 +85,8 @@ final class PostgresMessages {
     }
 
     static void insert(Connection connection, PostgresTopics.Topic topic, List<RawdataMessage> messages) throws SQLException {
-        try (PreparedStatement message = connection.prepareStatement(
-                "INSERT INTO " + topic.message() + " (id, position, ordering_group, sequence_number) VALUES (?, ?, ?, ?)");
-             PreparedStatement content = connection.prepareStatement(
-                     "INSERT INTO " + topic.content() + " (id, ordinal, name, data) VALUES (?, ?, ?, ?)")) {
+        try (PreparedStatement message = connection.prepareStatement(topic.sql().insertMessage);
+             PreparedStatement content = connection.prepareStatement(topic.sql().insertContent)) {
             boolean anyContent = false;
             for (RawdataMessage m : messages) {
                 message.setObject(1, m.id());

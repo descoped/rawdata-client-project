@@ -6,8 +6,9 @@ against another, and a system can move from one provider to another with the [co
 Limits are the same in every provider for a given configuration: an application configures how long a position
 and how large a publish call may be (`rawdata.limits.max-position-bytes`, default 2000 bytes in UTF-8, and
 `rawdata.limits.max-publish-bytes`, default 256 MiB, at most 512 MiB; `spi.RawdataLimits`), and every provider
-checks them when a call is published, before anything is written. A call carries, for each message, the UTF-8 bytes
-of its position, ordering group and content keys and the length of its values. A metadata key is at most 127 bytes
+checks them when a call is published, before anything is written. A call carries, for each message
+(`RawdataLimits.size`), the UTF-8 bytes of its position, ordering group and content keys, the length of its values, and
+a fixed framing: 32 bytes a message, 10 a content key. A metadata key is at most 127 bytes
 (`RawdataMetadataClient.MAX_KEY_BYTES`: the filesystem provider stores it as a file name in hex). A topic copies to
 another store if the target's limits are at least the source's. Over a limit is refused with
 `IllegalArgumentException` before anything is written: a publish call when it is published, a metadata key by `put`,
@@ -142,6 +143,7 @@ waiting `receive`, which then throws, and fails a pending `receiveAsync` or `pub
 
 ## Copying
 
-`RawdataCopy.copy(from, to, batchSize, idleTimeout)` copies from a consumer to a producer in batches, keeping ids and
-order, until the source has had nothing new for the idle timeout. The [copy tool](modules/rawdata-copy-util.md) is built
+`RawdataCopy.copy(from, to, batchSize, targetLimits, idleTimeout)` copies from a consumer to a producer in batches,
+keeping ids and order, until the source has had nothing new for the idle timeout; each batch is published in calls that
+fit the target's publish limit. The [copy tool](modules/rawdata-copy-util.md) is built
 on it.

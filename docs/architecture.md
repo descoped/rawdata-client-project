@@ -159,6 +159,6 @@ closed object throws `RawdataClosedException`, except `isClosed` and `close`.
 ## The copy tool
 
 `RawdataCopyTool` reads `source.*` and `target.*` configurations and opens a client on each. For each topic, it
-starts a consumer after the target's last id and runs `RawdataCopy.copy`, which publishes in batches with the source's
-ids. Because the ids are kept and the target is written in the source's read order, a copy that stopped can be run
+starts a consumer after the target's last id and runs `RawdataCopy.copy` with the target's limits, which publishes in
+batches with the source's ids, each in calls that fit the target's publish limit. Because the ids are kept and the target is written in the source's read order, a copy that stopped can be run
 again.

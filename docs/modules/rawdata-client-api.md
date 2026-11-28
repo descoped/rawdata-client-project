@@ -374,12 +374,14 @@ Only the waits that declare `InterruptedException` (`receive`, `receiveUpTo`) re
 
 ### Copying
 
-`RawdataCopy.copy(from, to, batchSize, idleTimeout)` loops: `from.receiveUpTo(batchSize, idleTimeout)`, then
-`to.publish(batch)`, until a receive returns nothing within the idle timeout. It returns the number of messages
+`RawdataCopy.copy(from, to, batchSize, targetLimits, idleTimeout)` loops: `from.receiveUpTo(batchSize, idleTimeout)`,
+then publishes the batch in order, in as few calls as the target's publish limit allows (`RawdataLimits.size` of each
+message), until a receive returns nothing within the idle timeout. A message that alone does not fit the target fails
+the copy with `IllegalArgumentException`. Without `targetLimits`, the target is taken to have the default limits. It returns the number of messages
 copied. Messages keep their ids, so the target has the same order and ids as the source. Memory use is bounded by
 one batch. It closes neither the consumer nor the producer.
 
-If a publish fails, that batch is not copied, and the exception is thrown. The consumer has already moved past the
+If a publish fails, that call is not copied (the calls before it are), and the exception is thrown. The consumer has already moved past the
 batch, so to go on, make a new consumer that starts after the target's last id:
 
 ```java
@@ -682,6 +684,7 @@ refuse another provider's cursor with `IllegalArgumentException`.
 
 ```java
 static long copy(RawdataConsumer from, RawdataProducer to, int batchSize, Duration idleTimeout) throws InterruptedException
+static long copy(RawdataConsumer from, RawdataProducer to, int batchSize, RawdataLimits targetLimits, Duration idleTimeout) throws InterruptedException
 ```
 
 ### Exceptions
@@ -766,7 +769,8 @@ of a publish, configured by the application and the same in every provider.
 | Member | |
 |---|---|
 | `public static RawdataLimits of(Map<String, String> configuration)` | reads `rawdata.limits.max-position-bytes` (default 2000) and `rawdata.limits.max-publish-bytes` (default 256 MiB, at most `MAX_PUBLISH_BYTES_CEILING`, 512 MiB); a value out of range or not a whole number: `IllegalArgumentException` naming the key |
-| `public void requirePublishable(RawdataMessage... messages)` | refuses a null array or message (`NullPointerException`), a position over the limit, or a call carrying more than the publish limit: the UTF-8 bytes of each message's position, ordering group and content keys, and its values' lengths (`IllegalArgumentException`) |
+| `public void requirePublishable(RawdataMessage... messages)` | refuses a null array or message (`NullPointerException`), a position over the limit, or a call whose messages' sizes add up to more than the publish limit (`IllegalArgumentException`) |
+| `public static long size(RawdataMessage message)` | what a message counts: the UTF-8 bytes of its position, ordering group and content keys, its values' lengths, `MESSAGE_OVERHEAD_BYTES` (32) and `CONTENT_OVERHEAD_BYTES` (10) per key |
 | `DEFAULT` | the limits when none are configured |
 
 See [writing a provider](../writing-a-provider.md) for how to use them.

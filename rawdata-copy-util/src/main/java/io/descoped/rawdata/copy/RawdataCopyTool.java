@@ -8,6 +8,7 @@ import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.RawdataMetadataClient;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataTopics;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 import org.slf4j.bridge.SLF4JBridgeHandler;
 
 import java.io.IOException;
@@ -120,6 +121,7 @@ public final class RawdataCopyTool {
         try {
             from = client(configuration, "source.");
             to = client(configuration, "target.");
+            options.targetLimits = RawdataLimits.of(part(configuration, "target."));
             return copyAll(from, to, options, out, err);
         } catch (IllegalArgumentException | UncheckedConfigurationException e) {
             return usage(err, e.getMessage());
@@ -166,7 +168,7 @@ public final class RawdataCopyTool {
         long messages;
         try (RawdataConsumer consumer = consumer(from, topic.source(), resume ? last.id() : start, !resume);
              RawdataProducer producer = to.producer(topic.target())) {
-            messages = RawdataCopy.copy(consumer, producer, options.batchSize, options.idleTimeout);
+            messages = RawdataCopy.copy(consumer, producer, options.batchSize, options.targetLimits, options.idleTimeout);
         }
         StringBuilder report = new StringBuilder().append(topic).append(": ").append(plural(messages, "message", "messages"));
         if (resume) {
@@ -289,6 +291,7 @@ public final class RawdataCopyTool {
         UUID fromId;
         Long fromTime;
         int batchSize = 1000;
+        RawdataLimits targetLimits = RawdataLimits.DEFAULT;
         Duration idleTimeout = Duration.ofSeconds(1);
         final List<Topic> topics = new ArrayList<>();
 

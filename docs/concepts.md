@@ -669,8 +669,8 @@ way. A module whose exported API shows another module's types `requires transiti
 
 ### Copying
 
-**What.** `RawdataCopy.copy(from, to, batchSize, idleTimeout)` copies from a consumer to a producer in batches,
-keeping ids and order, until the source has had nothing new for the idle timeout. The copy tool, `rawdata-copy`, is a
+**What.** `RawdataCopy.copy(from, to, batchSize, targetLimits, idleTimeout)` copies from a consumer to a producer in
+batches, in calls that fit the target's publish limit, keeping ids and order, until the source has had nothing new for the idle timeout. The copy tool, `rawdata-copy`, is a
 command-line program on top of it that copies topics between any two providers and resumes after the target's last
 id.
 

@@ -7,6 +7,7 @@ import java.sql.ResultSet;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -37,7 +38,7 @@ final class PostgresRawdataMetadataClient implements RawdataMetadataClient {
             return Set.of();
         }
         return client.jdbc().transaction("read the metadata keys of topic " + topic, connection -> {
-            try (PreparedStatement select = connection.prepareStatement("SELECT name FROM " + tables.metadata() + " ORDER BY name");
+            try (PreparedStatement select = connection.prepareStatement(tables.sql().metadataKeys);
                  ResultSet rows = select.executeQuery()) {
                 Set<String> keys = new LinkedHashSet<>();
                 while (rows.next()) {
@@ -52,12 +53,12 @@ final class PostgresRawdataMetadataClient implements RawdataMetadataClient {
     public byte[] get(String key) {
         RawdataMetadataClient.requireValidKey(key);
         client.checkOpen();
-        PostgresTopics.Topic tables = client.topics().find(topic);
-        if (tables == null) {
-            return null;
-        }
+        return Optional.ofNullable(client.topics().find(topic)).map(tables -> read(tables, key)).orElse(null);
+    }
+
+    private byte[] read(PostgresTopics.Topic tables, String key) {
         return client.jdbc().transaction("read metadata of topic " + topic, connection -> {
-            try (PreparedStatement select = connection.prepareStatement("SELECT data FROM " + tables.metadata() + " WHERE name = ?")) {
+            try (PreparedStatement select = connection.prepareStatement(tables.sql().metadataGet)) {
                 select.setString(1, key);
                 try (ResultSet rows = select.executeQuery()) {
                     return rows.next() ? rows.getBytes(1) : null;
@@ -74,8 +75,7 @@ final class PostgresRawdataMetadataClient implements RawdataMetadataClient {
         byte[] copy = value.clone();
         PostgresTopics.Topic tables = client.topics().create(topic);
         client.jdbc().transaction("write metadata of topic " + topic, connection -> {
-            try (PreparedStatement upsert = connection.prepareStatement("INSERT INTO " + tables.metadata()
-                    + " (name, data) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET data = EXCLUDED.data")) {
+            try (PreparedStatement upsert = connection.prepareStatement(tables.sql().metadataPut)) {
                 upsert.setString(1, key);
                 upsert.setBytes(2, copy);
                 upsert.executeUpdate();
@@ -94,7 +94,7 @@ final class PostgresRawdataMetadataClient implements RawdataMetadataClient {
             return this;
         }
         client.jdbc().transaction("remove metadata of topic " + topic, connection -> {
-            try (PreparedStatement delete = connection.prepareStatement("DELETE FROM " + tables.metadata() + " WHERE name = ?")) {
+            try (PreparedStatement delete = connection.prepareStatement(tables.sql().metadataRemove)) {
                 delete.setString(1, key);
                 delete.executeUpdate();
             }

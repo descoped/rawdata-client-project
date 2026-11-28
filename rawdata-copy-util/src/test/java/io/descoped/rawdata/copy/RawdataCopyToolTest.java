@@ -295,6 +295,57 @@ class RawdataCopyToolTest {
         assertTrue(RawdataIds.ORDER.compare(late, early) > 0);
     }
 
+    /**
+     * A target that has messages, and a start point after its last id: the copy starts at the start point, not after
+     * the target's last id, and the report says so.
+     */
+    @Test
+    void aStartPointAfterTheTargetsLastIdStartsThere() throws Exception {
+        Map<String, String> source = filesystem("source");
+        Map<String, String> target = filesystem("target");
+        long base = System.currentTimeMillis() - 100_000;
+        try (RawdataClient client = RawdataClient.create(source); RawdataProducer producer = client.producer("a")) {
+            for (int i = 0; i < 10; i++) {
+                producer.publish(RawdataMessage.builder().id(RawdataIds.beginningOf(base + 1000L * i)).position("m" + i).build());
+            }
+        }
+        Path config = config(source, target);
+        UUID third = RawdataIds.beginningOf(base + 2000);
+        assertEquals(RawdataCopyTool.OK, run("--config", config.toString(), "--idle-timeout-ms", "100",
+                "--from-time", String.valueOf(base), "a"), err());
+        out();
+        try (RawdataClient client = RawdataClient.create(target); RawdataProducer producer = client.producer("a")) {
+            producer.publish(RawdataMessage.builder().id(third).position("m2").build()); // the same message: a no-op
+        }
+        UUID later = RawdataIds.beginningOf(base + 7000);
+        assertEquals(RawdataCopyTool.OK, run("--config", config.toString(), "--idle-timeout-ms", "100",
+                "--from-time", String.valueOf(base + 7000), "a"), err());
+        assertTrue(out().startsWith("a -> a: 0 messages after "), "the target already holds everything: " + out());
+        Map<String, String> fresh = filesystem("fresh");
+        try (RawdataClient client = RawdataClient.create(fresh); RawdataProducer producer = client.producer("a")) {
+            producer.publish(RawdataMessage.builder().id(third).position("m2").build());
+        }
+        assertEquals(RawdataCopyTool.OK, run("--config", config(source, fresh).toString(), "--idle-timeout-ms", "100",
+                "--from-time", String.valueOf(base + 7000), "a"), err());
+        assertEquals("a -> a: 3 messages from " + later + "\n", out().replace(System.lineSeparator(), "\n"),
+                "a start point after the target's last id wins");
+        assertEquals(List.of("m2", "m7", "m8", "m9"), read(fresh, "a").stream().map(RawdataMessage::position).toList());
+    }
+
+    /**
+     * The error line names a failure's causes and suppressed failures, and a failure without a message.
+     */
+    @Test
+    void aFailureIsDescribedWithItsCausesAndSuppressedFailures() {
+        IllegalStateException failure = new IllegalStateException("outer", new java.io.IOException("disk"));
+        failure.addSuppressed(new RuntimeException());
+        String described = RawdataCopyTool.describe(failure);
+        assertTrue(described.startsWith("IllegalStateException: outer"), described);
+        assertTrue(described.contains("suppressed: RuntimeException"), described);
+        assertTrue(described.contains("caused by: IOException: disk"), described);
+        assertFalse(described.contains("null"), described);
+    }
+
     @Test
     void helpShowsTheUsage() {
         assertEquals(RawdataCopyTool.OK, run("--help"));

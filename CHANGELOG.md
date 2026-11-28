@@ -119,6 +119,13 @@
   `If-None-Match: *`, and `http.maxConnections` bounds the idle connections.
 - TCK: the missing-store tests also check metadata `put` and `remove` (`aStoreThatDoesNotExistFails`) and
   `deleteMetadata` (`AvroStoreContractTest.aMissingLocationFails`).
+- rawdata-copy (design review copy-1, copy-3, copy-5 to copy-8):
+  - The target's producer is opened before its last message is read, so a run after a killed one resumes after what
+    that run left in the target's upload buffer, and the report's count and `after <id>` are right.
+  - Each client is closed on its own, the target first; a failure to close the target is printed and exits 1, and
+    never escapes `run` or keeps the source from closing.
+  - The error line names the failure's causes and suppressed failures; a store that cannot be opened is reported
+    without the usage text.
 - postgres: a publish that waited for its turn while its producer closed writes nothing and throws
   `RawdataClosedException`; a publish under way when the client closes is reported as `RawdataClosedException` (it
   was a plain `RawdataException`) and writes nothing.

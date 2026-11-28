@@ -69,12 +69,42 @@ class GcsIntegrityTest {
     @Test
     void aTimedOutSegmentUploadIsReportedAsThrottling() {
         AtomicInteger throttled = new AtomicInteger();
-        GcsClient client = new GcsClient(new TimingOut(), "http://localhost", GcsCredentials.NONE);
+        AtomicInteger waits = new AtomicInteger();
+        GcsClient client = new GcsClient(new TimingOut(), "http://localhost", GcsCredentials.NONE, millis -> waits.incrementAndGet());
         client.onThrottled(throttled::incrementAndGet);
         assertThrows(HttpTimeoutException.class, () -> client.upload("b", "s", "avro/binary", new byte[]{1}, 0, true));
         assertEquals(6, throttled.get(), "every attempt");
+        assertEquals(5, waits.get(), "a back-off between attempts, none after the last");
         assertThrows(HttpTimeoutException.class, () -> client.generation("b", "o"));
         assertEquals(6, throttled.get(), "not a read");
+    }
+
+    /**
+     * A metadata write whose entry changes under every write gives up after a bounded number of rounds, naming the
+     * object, instead of trying forever; one that succeeds after a few rounds writes once.
+     *
+     * @throws Exception if the test fails unexpectedly
+     */
+    @Test
+    void aMetadataWriteThatKeepsLosingGivesUp() throws Exception {
+        AtomicInteger uploads = new AtomicInteger();
+        AtomicInteger succeedAt = new AtomicInteger(Integer.MAX_VALUE);
+        try (LocalHttp gcs = new LocalHttp(request -> {
+            if (request.method().equals("POST")) {
+                return LocalHttp.Response.json(uploads.incrementAndGet() >= succeedAt.get() ? 200 : 412, "{}");
+            }
+            return LocalHttp.Response.json(200, "{\"generation\":\"" + uploads.get() + "\"}");
+        })) {
+            GcsAvroStore store = new GcsAvroStore(new GcsClient(gcs.root(), GcsCredentials.NONE), "b", "p/");
+            byte[] value = {1};
+            IOException lost = assertThrows(IOException.class, () -> store.writeMetadata("t", "k", value));
+            assertTrue(lost.getMessage().contains("p/t/metadata/k"), lost.getMessage());
+            assertEquals(10, uploads.get());
+            uploads.set(0);
+            succeedAt.set(3);
+            store.writeMetadata("t", "k", value);
+            assertEquals(3, uploads.get(), "written at the third round");
+        }
     }
 
     /**

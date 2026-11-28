@@ -12,7 +12,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.http.HttpClient;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 
@@ -88,7 +87,7 @@ public final class GcsRawdataClientInitializer implements RawdataClientInitializ
         long pollInterval = AvroConfiguration.pollIntervalMillis(configuration, POLL_INTERVAL, 1);
         AvroUploadWindow window = AvroUploadWindow.of(configuration);
         String endpoint = AvroConfiguration.optional(configuration, ENDPOINT, GcsClient.DEFAULT_ENDPOINT);
-        HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        HttpClient http = GcsClient.defaultHttp();
         GcsClient client = new GcsClient(http, endpoint, loadCredentials(configuration, http));
         return new AvroRawdataClient(new GcsAvroStore(client, bucket, prefix), window, limits, pollInterval);
     }

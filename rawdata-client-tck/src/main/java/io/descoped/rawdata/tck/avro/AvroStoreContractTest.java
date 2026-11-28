@@ -208,6 +208,7 @@ public abstract class AvroStoreContractTest {
             assertThrows(IOException.class, () -> missing.metadataNames(topic));
             assertThrows(IOException.class, () -> missing.readMetadata(topic, "k01"));
             assertThrows(IOException.class, () -> missing.writeMetadata(topic, "k01", new byte[]{1}));
+            assertThrows(IOException.class, () -> missing.deleteMetadata(topic, "k01"));
         }
     }
 }

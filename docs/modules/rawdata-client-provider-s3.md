@@ -282,6 +282,10 @@ The engine runs a topic's uploads one at a time, in segment order, so segments a
 | list metadata keys | `ListObjectsV2` of the topic's `metadata/` | `s3:ListBucket` |
 | read, write, remove metadata | `GetObject`, `PutObject`, `DeleteObject` | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` |
 
+**Every role needs `s3:ListBucket` on the bucket**, readers too: without it, S3 answers a HEAD or GET of a key that
+does not exist with 403 `AccessDenied`, not 404, so a consumer waiting for the next segment, `exists`, and a read of a
+missing metadata entry fail instead of finding nothing.
+
 With a customer-managed KMS key the role also needs `kms:Encrypt`, `kms:Decrypt` and `kms:GenerateDataKey` on it.
 
 ## Configuration
@@ -299,7 +303,7 @@ missing.
 | `s3.profile` | | Required for `profile`: the profile in `~/.aws/config` and `~/.aws/credentials`. |
 | `s3.access-key-id` | | Required for `static`. |
 | `s3.secret-access-key` | | Required for `static`. |
-| `s3.endpoint` | AWS's | Another endpoint URI, for an S3-compatible store or an emulator, for example `http://localhost:9090`. |
+| `s3.endpoint` | AWS's | Another endpoint URI, for an S3-compatible store or an emulator, for example `http://localhost:9090`. The store must honour `If-None-Match: *` on `PutObject`: one that ignores it overwrites another writer's segment instead of refusing it, and the one-writer check cannot work. |
 | `s3.path-style-access` | `true` if the bucket name has a dot, else `false` | `true` or `false` (exact): path-style requests. |
 | `s3.sse` | the bucket's default encryption | `AES256` or `aws:kms` (exact), asked for on every put. |
 | `s3.sse-kms-key-id` | the account's default KMS key | The KMS key for `aws:kms`; refused with any other `s3.sse`. |
@@ -310,7 +314,7 @@ missing.
 | `avro-file.sync.interval` | `524288` (512 KiB) | The block size Avro's buffer is sized for; every publish call ends its own block, written to the file; the file is forced to disk every this many bytes. |
 | `avro-file.max.pending-uploads` | `4` | Sealed windows of a topic that may wait for upload before `publish` waits. |
 | `avro-file.close-timeout-seconds` | `30` | The longest `close()` waits for the uploads. |
-| `avro-file.upload.max-concurrency` | `16` | The most uploads of a client at once, across its topics. |
+| `avro-file.upload.max-concurrency` | `16` | The most uploads of a client at once, across its topics. The JDK keeps at most `http.maxConnections` (a JVM-wide system property, default 5) idle connections per host; above that, connections are closed after use and the next request opens a new one. |
 
 Numbers are strict: `60`, not `60s`. A default covers a missing key, never a malformed value, and every error is an
 `IllegalArgumentException` that names the key. The window keys are explained in
@@ -321,8 +325,9 @@ Numbers are strict: `60`, not `60s`. A default covers a missing key, never a mal
 - **Object keys** are at most 1024 bytes in S3. A metadata entry's object key is `<prefix><topic>/metadata/k` plus
   twice the key's UTF-8 length. **The prefix** is at most 659 bytes, so that a metadata key of 127 bytes
   (`RawdataMetadataClient.MAX_KEY_BYTES`, the limit in every provider) always fits, even with a 100-character topic.
-- **Memory**: each running upload holds its window in memory, so uploads can take up to
-  `avro-file.upload.max-concurrency` × `avro-file.max.bytes` of heap, 1 GiB at the defaults.
+- **Memory**: each running upload holds its window in memory, once (the SDK reads the engine's array, never a copy),
+  so uploads can take up to `avro-file.upload.max-concurrency` × `avro-file.max.bytes` of heap, 1 GiB at the
+  defaults.
 
 ### Examples
 

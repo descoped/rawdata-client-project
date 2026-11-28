@@ -31,6 +31,16 @@ import java.util.TreeSet;
  */
 final class GcsAvroStore implements AvroStore {
 
+    /**
+     * The range a taken segment is compared in.
+     */
+    private static final int COMPARE_RANGE = 8 * 1024 * 1024;
+
+    /**
+     * How many times a metadata write is tried while the entry keeps changing under it.
+     */
+    private static final int METADATA_ROUNDS = 10;
+
     private final GcsClient client;
     private final String bucket;
     private final String prefix;
@@ -55,7 +65,21 @@ final class GcsAvroStore implements AvroStore {
                 || stored.get().crc32c() != null && !stored.get().crc32c().equals(AvroChecksums.crc32c(content))) {
             return false;
         }
-        return client.download(bucket, name).map(bytes -> Arrays.equals(content, bytes)).orElse(false);
+        return sameBytes(name, stored.get().generation(), content);
+    }
+
+    /**
+     * Whether a stored generation holds these bytes, compared a range at a time, never read whole into memory.
+     */
+    private boolean sameBytes(String name, long generation, byte[] content) throws IOException {
+        for (int offset = 0; offset < content.length; offset += COMPARE_RANGE) {
+            int length = Math.min(COMPARE_RANGE, content.length - offset);
+            byte[] stored = client.downloadRange(bucket, name, generation, offset, length);
+            if (!Arrays.equals(content, offset, offset + length, stored, 0, length)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override
@@ -137,18 +161,21 @@ final class GcsAvroStore implements AvroStore {
     @Override
     public void writeMetadata(String topic, String name, byte[] value) throws IOException {
         String object = metadata(topic, name);
-        for (; ; ) {
+        for (int round = 0; round < METADATA_ROUNDS; round++) {
             OptionalLong current = client.generation(bucket, object);
             if (client.upload(bucket, object, "application/octet-stream", value, current.orElse(0), false)) {
                 return;
             }
             // another writer changed the entry meanwhile; write again over its value
         }
+        throw new IOException("Writing " + object + " failed: it changed under every one of " + METADATA_ROUNDS + " writes");
     }
 
     @Override
     public void deleteMetadata(String topic, String name) throws IOException {
-        client.delete(bucket, metadata(topic, name));
+        if (!client.delete(bucket, metadata(topic, name))) {
+            checkBucket(); // a 404 is a missing object or a missing bucket
+        }
     }
 
     @Override

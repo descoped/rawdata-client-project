@@ -109,6 +109,16 @@
     move, the folder after it), so an uploaded window survives a power loss, as the durability rule says. Two `fsync`
     calls per uploaded window.
   - A segment number taken by other bytes is compared on disk, never read into memory.
+- gcs (design review gcs-2, gcs-7 to gcs-10): removing a metadata entry in a bucket that does not exist fails, as
+  every other call does, instead of succeeding; a metadata write whose entry keeps changing under it gives up after
+  10 rounds, naming the object, instead of trying forever; a taken segment is compared in 8 MiB ranges, never read
+  whole into memory.
+- s3 (design review s3-3, s3-6 to s3-8): a segment upload sends the window without a copy, so uploads take the heap the
+  docs state (1 GiB at the defaults), not twice that; an interrupted call reaches the engine as
+  `InterruptedIOException`; the docs say every role needs `s3:ListBucket`, an S3-compatible store must honour
+  `If-None-Match: *`, and `http.maxConnections` bounds the idle connections.
+- TCK: the missing-store tests also check metadata `put` and `remove` (`aStoreThatDoesNotExistFails`) and
+  `deleteMetadata` (`AvroStoreContractTest.aMissingLocationFails`).
 - postgres: a publish that waited for its turn while its producer closed writes nothing and throws
   `RawdataClosedException`; a publish under way when the client closes is reported as `RawdataClosedException` (it
   was a plain `RawdataException`) and writes nothing.

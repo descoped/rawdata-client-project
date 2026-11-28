@@ -1362,6 +1362,10 @@ public abstract class RawdataClientContractTest {
             assertThrows(RawdataException.class, () -> broken.lastMessage(topic));
             assertThrows(RawdataException.class, () -> broken.metadata(topic).keys());
             assertThrows(RawdataException.class, () -> broken.metadata(topic).get("k"));
+            RawdataMetadataClient metadata = broken.metadata(topic);
+            byte[] value = {1};
+            assertThrows(RawdataException.class, () -> metadata.put("k", value));
+            assertThrows(RawdataException.class, () -> metadata.remove("k"), "removing never succeeds on a missing store");
             RawdataMessage a = message("a");
             assertThrows(RawdataException.class, () -> broken.producer(topic).publish(a));
             try (RawdataConsumer consumer = broken.consumer(topic)) {

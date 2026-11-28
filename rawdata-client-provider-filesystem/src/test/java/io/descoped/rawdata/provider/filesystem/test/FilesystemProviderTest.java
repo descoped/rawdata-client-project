@@ -20,6 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -39,6 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 /**
  * The provider's internals, which the TCK cannot see: the files on disk, metadata file names, and the configuration.
@@ -225,6 +227,42 @@ class FilesystemProviderTest {
     }
 
     /**
+     * A storage folder removed while a client runs (by hand, a cleanup job, a mount that drops) is never created
+     * again: the writer fails at its next window, and a read fails instead of finding an empty topic.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void aStorageFolderRemovedWhileRunningFailsAndIsNotCreatedAgain() throws Exception {
+        Path storage = folder.resolve("removed");
+        Path buffer = folder.resolve("removed-buffer");
+        RawdataClient client = RawdataClient.create(configuration(storage, buffer));
+        try {
+            RawdataProducer producer = client.producer("t");
+            producer.publish(message("a"));
+            ((AvroRawdataClient) client).flush("t");
+            deleteTree(storage);
+            RawdataMessage b = message("b");
+            assertThrows(RawdataException.class, () -> { // when the next window opens, or when it uploads
+                producer.publish(b);
+                ((AvroRawdataClient) client).flush("t");
+            });
+            assertFalse(Files.exists(storage), "the storage folder is not created again");
+            assertThrows(RawdataException.class, () -> client.lastMessage("u"), "a read fails, never finds an empty topic");
+        } finally {
+            assertThrows(RawdataException.class, client::close, "closing reports the failed writer");
+        }
+    }
+
+    private static void deleteTree(Path root) throws IOException {
+        try (Stream<Path> paths = Files.walk(root)) {
+            for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                Files.delete(path);
+            }
+        }
+    }
+
+    /**
      * An upload that fails fails the writer loudly: the flush and every later publish throw, closing throws, and the
      * window stays on disk, sealed. The next writer uploads it, and nothing is lost.
      *
@@ -232,6 +270,7 @@ class FilesystemProviderTest {
      */
     @Test
     void aFailedUploadKeepsTheWindowForTheNextWriter() throws Exception {
+        assumeFalse("root".equals(System.getProperty("user.name")), "root ignores the permission that fails the store");
         Path buffer = folder.resolve("failing");
         Path segments = folder.resolve("t").resolve("segments");
         RawdataClient failing = RawdataClient.create(configuration(folder, buffer));
@@ -248,6 +287,10 @@ class FilesystemProviderTest {
         } finally {
             Files.setPosixFilePermissions(segments, PosixFilePermissions.fromString("rwxr-xr-x"));
             failing.close();
+        }
+        try (Stream<Path> files = Files.list(folder.resolve("t"))) {
+            assertEquals(List.of(), files.map(file -> file.getFileName().toString()).filter(name -> name.endsWith(".tmp")).toList(),
+                    "a failed create leaves no temporary file");
         }
         try (Stream<Path> files = Files.list(buffer.resolve("t"))) {
             assertEquals(List.of("0000000000000000001.sealed.avro"),

@@ -28,8 +28,8 @@ import java.util.Set;
  * {@code avro-file.close-timeout-seconds} and {@code avro-file.upload.max-concurrency}. A message is visible to
  * consumers once its window is uploaded.
  * <p>
- * A metadata key is at most 127 bytes in UTF-8, so that its file name fits in 255 characters; a longer key is refused
- * with {@link IllegalArgumentException}.
+ * A metadata key is at most {@link io.descoped.rawdata.api.RawdataMetadataClient#MAX_KEY_BYTES} bytes, as in every
+ * provider; its file name, the key in hex, then fits in 255 characters.
  */
 @ProviderName("filesystem")
 public final class FilesystemRawdataClientInitializer implements RawdataClientInitializer {

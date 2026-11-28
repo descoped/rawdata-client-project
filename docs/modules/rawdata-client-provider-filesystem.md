@@ -122,7 +122,9 @@ minute for the messages.
 ### The storage folder
 
 `filesystem.storage-folder` is the root of every topic the client sees. Each topic is a folder in it. The provider
-creates the storage folder, and any missing parent, when the client is created. Several clients, in one process or
+creates the storage folder, and any missing parent, when the client is created, and never after that: a storage
+folder that is removed or unmounted while a client runs fails every read and write with `RawdataException`, as a
+missing bucket does, instead of reading as empty topics or being created again with part of a topic. Several clients, in one process or
 in many, may point at the same storage folder: each reads every topic in it, and one of them writes each topic (see
 [one writer per topic](#one-writer-per-topic)).
 
@@ -309,11 +311,12 @@ engine](rawdata-client-provider-avro.md#how-it-works) page.
   complete blocks, and sets aside what no longer belongs. A temporary `.*.tmp` file in a topic folder can also be
   left, when the crash came between writing it and linking it. Nothing reads it, and it may be deleted.
 - **What survives a crash of the machine.** The buffer is forced to disk (`fsync`) every `avro-file.sync.interval`
-  bytes, and sealed windows when they seal; the calls since the last force may be lost. The
-  store's own writes are not: the segment's temporary file, the hard link and metadata files are written through the
-  operating system's cache, without `fsync` of the file or its folder. Once the sealed window has been removed from the
-  buffer, a power loss before the operating system writes its cache can lose a segment that was already visible.
-  Choose a file system and mount options that suit the durability you need.
+  bytes, and sealed windows when they seal; the calls since the last force may be lost. The store forces its own
+  writes before it reports them done: a segment's or metadata entry's temporary file is forced (`fsync`) before it is
+  linked or moved to its name, and the folder that holds the name after that (not on Windows, which cannot open a
+  folder for it). So a segment is on disk before its window leaves the buffer, and an uploaded window survives a power
+  loss, as in gcs and s3. That is two `fsync` calls per uploaded window, not per publish. On macOS `force` is `fsync`,
+  which leaves the drive's own cache to the drive.
 
 ### The read path
 
@@ -386,6 +389,7 @@ with advice on tuning them, in [Avro engine: configuration](rawdata-client-provi
 | `IllegalArgumentException: Missing configuration 'filesystem.storage-folder'` (or `'local-temp-folder'`) | a required key is blank | give it a value |
 | `IllegalArgumentException: Configuration 'avro-file.max.seconds' must be a whole number: '60s'` | a malformed number | write whole numbers only |
 | `RawdataException: Cannot create the storage folder <folder>` at `RawdataClient.create` | the folder cannot be created: no permission, or a regular file in the path | fix the path or its permissions |
+| `RawdataException` mentioning `the storage folder does not exist` while a client runs | the storage folder was removed, or its mount dropped | restore or remount it; the writer's windows not uploaded are kept in the buffer for the next writer |
 | Messages are not visible right after `publish` | they are in the open window | close the producer, wait `avro-file.max.seconds`, or call `AvroRawdataClient.flush(topic)` in tests |
 | `RawdataException: The buffer folder <folder> of topic '<topic>' is in use by another client` | another client, in this JVM or another process, writes the topic from the same `local-temp-folder` | write each topic from one client; give each process a buffer folder of its own |
 | `RawdataWriterConflictException: Another client published to topic '<topic>'` | another process wrote the topic, with a buffer folder of its own | stop the second writer; a client created after it stopped starts from the topic's end. The windows set aside are kept as `*.invalid` in the buffer folder |
@@ -414,8 +418,8 @@ provider (so that the store contract can reach the package-private `FilesystemAv
 | Test | What it checks |
 |---|---|
 | [`FilesystemContractTest`](../../rawdata-client-provider-filesystem/src/test/java/io/descoped/rawdata/provider/filesystem/test/FilesystemContractTest.java) | the whole provider contract (`AvroClientContractTest`, which extends `RawdataClientContractTest`), with a storage folder that cannot exist (one inside a regular file) |
-| [`FilesystemStoreContractTest`](../../rawdata-client-provider-filesystem/src/test/java/io/descoped/rawdata/provider/filesystem/FilesystemStoreContractTest.java) | the `AvroStore` contract (`AvroStoreContractTest`), and that an opened segment is pinned to its file |
-| [`FilesystemProviderTest`](../../rawdata-client-provider-filesystem/src/test/java/io/descoped/rawdata/provider/filesystem/test/FilesystemProviderTest.java) | the files on disk: the layout, the Avro schema of a segment, metadata keys that are any string, the configuration checks, and recovery of sealed windows a crash left behind |
+| [`FilesystemStoreContractTest`](../../rawdata-client-provider-filesystem/src/test/java/io/descoped/rawdata/provider/filesystem/FilesystemStoreContractTest.java) | the `AvroStore` contract (`AvroStoreContractTest`), with a storage folder that is gone; that an opened segment is pinned to its file, that `exists` throws when the file system fails, and that a taken segment answers false and leaves no temporary file |
+| [`FilesystemProviderTest`](../../rawdata-client-provider-filesystem/src/test/java/io/descoped/rawdata/provider/filesystem/test/FilesystemProviderTest.java) | the files on disk: the layout, the Avro schema of a segment, metadata keys that are any string, the configuration checks, recovery of sealed windows a crash left behind, a failed upload that leaves no temporary file, and a storage folder removed while the client runs, which fails and is not created again |
 
 The JPMS smoke test (`src/it/jpms/run.sh`) also round-trips a topic through `filesystem` with everything on the
 module path and with everything on the class path.

@@ -6,6 +6,7 @@ import com.zaxxer.hikari.pool.HikariPool;
 import io.descoped.rawdata.api.RawdataClient;
 import io.descoped.rawdata.api.RawdataClientInitializer;
 import io.descoped.rawdata.api.RawdataException;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 import io.descoped.service.provider.api.ProviderName;
 
 import java.util.Locale;
@@ -24,6 +25,11 @@ import java.util.TreeSet;
  *     <tr><td>{@code postgres.driver.password}</td><td>required</td></tr>
  *     <tr><td>{@code postgres.driver.database}</td><td>required</td></tr>
  *     <tr><td>{@code postgres.driver.max-pool-size}</td><td>{@code 10}</td></tr>
+ *     <tr><td>{@code postgres.schema}</td><td>{@code public}: the schema of the client's topics, an unquoted
+ *     identifier (a-z, 0-9, _); one schema per class of data keeps topics of different sensitivity under different
+ *     grants. It must exist.</td></tr>
+ *     <tr><td>{@code rawdata.limits.max-position-bytes}, {@code rawdata.limits.max-publish-bytes}</td><td>the limits
+ *     of a publish, as in every provider: {@link RawdataLimits}</td></tr>
  *     <tr><td>{@code rawdata.postgres.consumer.prefetch-size}</td><td>{@code 100}: messages per fetch</td></tr>
  *     <tr><td>{@code rawdata.postgres.consumer.prefetch-poll-interval-when-empty}</td><td>{@code 250}: milliseconds
  *     between polls of a topic that has nothing new</td></tr>
@@ -39,8 +45,9 @@ import java.util.TreeSet;
  *     <tr><td>{@code postgres.driver.ssl-root-cert}</td><td>none: a file of the certificates that sign the server's;
  *     only with {@code verify-ca} or {@code verify-full}, refused with any other mode</td></tr>
  * </table>
- * The tables are created in the user's default schema when they are missing; a role that may not create tables can
- * use tables created by another role. Connections are READ COMMITTED whatever the database's default, and show as
+ * Each topic has tables of its own, created at its first write in one transaction; the schema's registry of topics is
+ * created when missing. Nothing is ever dropped. Creating needs {@code CREATE} on the schema; reading needs only
+ * {@code USAGE} on it and {@code SELECT} on the tables. Connections are READ COMMITTED whatever the database's default, and show as
  * application {@code rawdata-postgres} in {@code pg_stat_activity}.
  */
 @ProviderName("postgres")
@@ -52,6 +59,7 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
     static final String PASSWORD = "postgres.driver.password";
     static final String DATABASE = "postgres.driver.database";
     static final String MAX_POOL_SIZE = "postgres.driver.max-pool-size";
+    static final String SCHEMA = "postgres.schema";
     static final String PREFETCH_SIZE = "rawdata.postgres.consumer.prefetch-size";
     static final String POLL_INTERVAL = "rawdata.postgres.consumer.prefetch-poll-interval-when-empty";
     static final String WAKE_ON_PUBLISH = "rawdata.postgres.consumer.wake-on-publish";
@@ -81,6 +89,9 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
 
     @Override
     public RawdataClient initialize(Map<String, String> configuration) {
+        RawdataLimits limits = RawdataLimits.of(configuration);
+        String schemaName = configuration.get(SCHEMA);
+        PostgresSchema schema = new PostgresSchema(schemaName == null || schemaName.isBlank() ? "public" : schemaName.trim());
         int prefetchSize = positive(configuration, PREFETCH_SIZE, 100);
         int pollIntervalMillis = positive(configuration, POLL_INTERVAL, 250);
         boolean wakeOnPublish = bool(configuration, WAKE_ON_PUBLISH, true);
@@ -112,12 +123,12 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
             throw new RawdataException("PostgreSQL: " + e.getMessage(), e);
         }
         try {
-            PostgresSchema.create(new Jdbc(dataSource, () -> false));
+            schema.create(new Jdbc(dataSource, () -> false));
         } catch (RuntimeException e) {
             dataSource.close();
             throw e;
         }
-        return new PostgresRawdataClient(dataSource, prefetchSize, pollIntervalMillis, wakeOnPublish, lockTimeoutMillis);
+        return new PostgresRawdataClient(dataSource, schema, limits, prefetchSize, pollIntervalMillis, wakeOnPublish, lockTimeoutMillis);
     }
 
     private static String required(Map<String, String> configuration, String key) {

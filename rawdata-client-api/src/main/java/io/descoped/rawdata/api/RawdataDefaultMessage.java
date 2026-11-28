@@ -82,6 +82,12 @@ final class RawdataDefaultMessage implements RawdataMessage {
     }
 
     @Override
+    public int length(String key) {
+        byte[] value = data.get(key);
+        return value == null ? -1 : value.length;
+    }
+
+    @Override
     public boolean equals(Object o) {
         if (this == o) {
             return true;

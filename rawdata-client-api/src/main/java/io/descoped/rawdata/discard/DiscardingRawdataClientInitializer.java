@@ -2,12 +2,14 @@ package io.descoped.rawdata.discard;
 
 import io.descoped.rawdata.api.RawdataClient;
 import io.descoped.rawdata.api.RawdataClientInitializer;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 import io.descoped.service.provider.api.ProviderName;
 
 import java.util.Map;
 
 /**
- * The {@code discard} provider: accepts everything and keeps nothing. No configuration.
+ * The {@code discard} provider: accepts everything within the limits and keeps nothing. Configuration: the limits of
+ * {@link RawdataLimits}, nothing else.
  */
 @ProviderName("discard")
 public class DiscardingRawdataClientInitializer implements RawdataClientInitializer {
@@ -21,6 +23,6 @@ public class DiscardingRawdataClientInitializer implements RawdataClientInitiali
 
     @Override
     public RawdataClient initialize(Map<String, String> configuration) {
-        return new DiscardingRawdataClient();
+        return new DiscardingRawdataClient(RawdataLimits.of(configuration));
     }
 }

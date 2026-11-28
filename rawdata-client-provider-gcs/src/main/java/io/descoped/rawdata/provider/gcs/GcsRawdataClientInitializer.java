@@ -2,6 +2,7 @@ package io.descoped.rawdata.provider.gcs;
 
 import io.descoped.rawdata.api.RawdataClient;
 import io.descoped.rawdata.api.RawdataClientInitializer;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 import io.descoped.rawdata.provider.avro.AvroConfiguration;
 import io.descoped.rawdata.provider.avro.AvroRawdataClient;
 import io.descoped.rawdata.provider.avro.AvroUploadWindow;
@@ -81,6 +82,7 @@ public final class GcsRawdataClientInitializer implements RawdataClientInitializ
 
     @Override
     public RawdataClient initialize(Map<String, String> configuration) {
+        RawdataLimits limits = RawdataLimits.of(configuration);
         String bucket = AvroConfiguration.required(configuration, BUCKET);
         String prefix = AvroConfiguration.prefix(configuration, PREFIX);
         long pollInterval = AvroConfiguration.pollIntervalMillis(configuration, POLL_INTERVAL, 1);
@@ -88,7 +90,7 @@ public final class GcsRawdataClientInitializer implements RawdataClientInitializ
         String endpoint = AvroConfiguration.optional(configuration, ENDPOINT, GcsClient.DEFAULT_ENDPOINT);
         HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
         GcsClient client = new GcsClient(http, endpoint, loadCredentials(configuration, http));
-        return new AvroRawdataClient(new GcsAvroStore(client, bucket, prefix), window, pollInterval);
+        return new AvroRawdataClient(new GcsAvroStore(client, bucket, prefix), window, limits, pollInterval);
     }
 
     static GcsCredentials loadCredentials(Map<String, String> configuration, HttpClient http) {

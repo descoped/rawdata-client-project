@@ -12,9 +12,8 @@ import io.descoped.rawdata.api.RawdataNoSuchPositionException;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataTopics;
 import io.descoped.rawdata.api.spi.IdRange;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
@@ -28,7 +27,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * The {@code postgres} provider's client. It owns its connection pool and closes it on {@link #close()}.
+ * The {@code postgres} provider's client. It owns its connection pool and closes it on {@link #close()}. Its topics are
+ * in one schema ({@link PostgresSchema}), each with tables of its own ({@link PostgresTopics}).
  */
 final class PostgresRawdataClient implements RawdataClient {
 
@@ -36,9 +36,11 @@ final class PostgresRawdataClient implements RawdataClient {
 
     private final HikariDataSource dataSource;
     private final Jdbc jdbc;
+    private final PostgresTopics topics;
     private final int prefetchSize;
     private final long pollIntervalMillis;
     private final boolean wakeOnPublish;
+    private final RawdataLimits limits;
     private final int lockTimeoutMillis; // 0: a publish waits for the topic lock as long as it is held
     private final AtomicBoolean closed = new AtomicBoolean();
     private final Set<Object> open = ConcurrentHashMap.newKeySet(); // producers and consumers
@@ -50,19 +52,21 @@ final class PostgresRawdataClient implements RawdataClient {
         return thread;
     });
 
-    PostgresRawdataClient(HikariDataSource dataSource, int prefetchSize, long pollIntervalMillis, boolean wakeOnPublish,
-                          int lockTimeoutMillis) {
+    PostgresRawdataClient(HikariDataSource dataSource, PostgresSchema schema, RawdataLimits limits, int prefetchSize,
+                          long pollIntervalMillis, boolean wakeOnPublish, int lockTimeoutMillis) {
+        this.limits = limits;
         this.wakeOnPublish = wakeOnPublish;
         this.lockTimeoutMillis = lockTimeoutMillis;
         this.dataSource = dataSource;
         this.jdbc = new Jdbc(dataSource, this::isClosed);
+        this.topics = new PostgresTopics(jdbc, schema);
         this.prefetchSize = prefetchSize;
         this.pollIntervalMillis = pollIntervalMillis;
     }
 
     @Override
     public RawdataProducer producer(String topic) {
-        PostgresRawdataProducer producer = new PostgresRawdataProducer(this, checked(topic));
+        PostgresRawdataProducer producer = new PostgresRawdataProducer(this, checked(topic), limits);
         open.add(producer);
         return producer;
     }
@@ -89,18 +93,9 @@ final class PostgresRawdataClient implements RawdataClient {
         String name = checked(topic);
         Objects.requireNonNull(position, "position");
         IdRange range = IdRange.around(approxTimestamp, tolerance);
-        UUID id = jdbc.transaction("find a position in topic " + name, connection -> {
-            try (PreparedStatement select = connection.prepareStatement(
-                    "SELECT id FROM rawdata_message WHERE topic = ? AND position = ? AND id >= ? AND id < ? ORDER BY id LIMIT 1")) {
-                select.setString(1, name);
-                select.setString(2, position);
-                select.setObject(3, range.from());
-                select.setObject(4, range.to());
-                try (ResultSet rows = select.executeQuery()) {
-                    return rows.next() ? rows.getObject(1, UUID.class) : null;
-                }
-            }
-        });
+        PostgresTopics.Topic found = topics.find(name);
+        UUID id = found == null ? null : jdbc.transaction("find a position in topic " + name,
+                connection -> PostgresMessages.atPosition(connection, found, position, range.from(), range.to()));
         if (id == null) {
             throw new RawdataNoSuchPositionException("Position not found in topic " + name + ": " + position);
         }
@@ -110,7 +105,9 @@ final class PostgresRawdataClient implements RawdataClient {
     @Override
     public RawdataMessage lastMessage(String topic) {
         String name = checked(topic);
-        return jdbc.transaction("read the last message of topic " + name, connection -> PostgresMessages.last(connection, name));
+        PostgresTopics.Topic found = topics.find(name);
+        return found == null ? null
+                : jdbc.transaction("read the last message of topic " + name, connection -> PostgresMessages.last(connection, found));
     }
 
     @Override
@@ -141,6 +138,10 @@ final class PostgresRawdataClient implements RawdataClient {
 
     Jdbc jdbc() {
         return jdbc;
+    }
+
+    PostgresTopics topics() {
+        return topics;
     }
 
     /**

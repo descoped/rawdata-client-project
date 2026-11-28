@@ -38,7 +38,9 @@ it with `rawdata.client.provider=mystore`.
 
 `io.descoped.rawdata.api.spi` has the parts every provider that reads its store in batches needs:
 
-- `OrderedRawdataProducer`: argument checks, `publishAsync`, closing, and `withIds(batch, lastId)`, which gives ids
+- `RawdataLimits`: the limits of a publish. Read them in `initialize` with `RawdataLimits.of(configuration)`, before
+  you open anything, so a bad value fails the start; pass them to your producer.
+- `OrderedRawdataProducer`: argument checks, the limits, `publishAsync`, closing, and `withIds(batch, lastId)`, which gives ids
   after the topic's greatest id and keeps given ones. You implement `write(batch)`: find the topic's greatest id,
   call `withIds`, leave out the messages already in the topic, and write the rest, all or nothing. If the topic moved
   since this client last wrote it (another process wrote), throw `RawdataWriterConflictException` and write nothing.
@@ -67,7 +69,8 @@ public RawdataClient initialize(Map<String, String> configuration) {
     String bucket = AvroConfiguration.required(configuration, "mystore.bucket");
     long pollInterval = AvroConfiguration.pollIntervalMillis(configuration, "mystore.listing.min-interval-seconds", 1);
     AvroUploadWindow window = AvroUploadWindow.of(configuration); // local-temp-folder and the avro-file.* keys
-    return new AvroRawdataClient(new MyAvroStore(bucket), window, pollInterval);
+    RawdataLimits limits = RawdataLimits.of(configuration);       // rawdata.limits.*, the same in every provider
+    return new AvroRawdataClient(new MyAvroStore(bucket), window, limits, pollInterval);
 }
 ```
 

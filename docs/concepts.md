@@ -124,7 +124,7 @@ with that position is there; a negative tolerance is refused.
 
 **Why.** The id belongs to the store; the position belongs to you. It lets you find "the message for invoice 1001"
 without keeping the id. Because a position need not be unique, and because file and object stores cannot index it,
-a search must be bounded by time. `postgres` searches an index on `(topic, position)` within the window; the Avro
+a search must be bounded by time. `postgres` searches an index on the position's hash within the window; the Avro
 providers stream the segments that cover the window.
 
 **Read more.** [API: cursor](modules/rawdata-client-api.md#cursor),
@@ -627,8 +627,9 @@ provider; they never relax a behaviour. Two rules follow:
 
 - A behaviour test goes in the TCK, never in one provider's tests, which only check internals: SQL, files and
   objects, configuration, credentials.
-- The limits are the same in every provider, the smallest every store holds, and the API checks them: a position or
-  content key of at most 2000 bytes, a metadata key of at most 127. A provider declares no limits of its own.
+- The limits are the same in every provider for a given configuration, and the API checks them: a position and a
+  publish call as configured (`rawdata.limits.*`, default 2000 bytes and 256 MiB), a metadata key of at most 127
+  bytes. A provider declares no limits of its own.
 
 **Why.** Providers can be swapped only if they behave the same. One set of tests, run against every provider, is the
 proof, and the reason [code tested against one provider holds for another](tutorial.md#step-12-switch-the-store).
@@ -668,8 +669,8 @@ way. A module whose exported API shows another module's types `requires transiti
 
 ### Copying
 
-**What.** `RawdataCopy.copy(from, to, batchSize, idleTimeout)` copies from a consumer to a producer in batches,
-keeping ids and order, until the source has had nothing new for the idle timeout. The copy tool, `rawdata-copy`, is a
+**What.** `RawdataCopy.copy(from, to, batchSize, targetLimits, idleTimeout)` copies from a consumer to a producer in
+batches, in calls that fit the target's publish limit, keeping ids and order, until the source has had nothing new for the idle timeout. The copy tool, `rawdata-copy`, is a
 command-line program on top of it that copies topics between any two providers and resumes after the target's last
 id.
 

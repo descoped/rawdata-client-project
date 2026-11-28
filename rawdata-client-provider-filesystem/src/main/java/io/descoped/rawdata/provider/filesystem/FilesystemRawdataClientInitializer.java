@@ -3,6 +3,7 @@ package io.descoped.rawdata.provider.filesystem;
 import io.descoped.rawdata.api.RawdataClient;
 import io.descoped.rawdata.api.RawdataClientInitializer;
 import io.descoped.rawdata.api.RawdataException;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 import io.descoped.rawdata.provider.avro.AvroConfiguration;
 import io.descoped.rawdata.provider.avro.AvroRawdataClient;
 import io.descoped.rawdata.provider.avro.AvroUploadWindow;
@@ -55,6 +56,7 @@ public final class FilesystemRawdataClientInitializer implements RawdataClientIn
 
     @Override
     public RawdataClient initialize(Map<String, String> configuration) {
+        RawdataLimits limits = RawdataLimits.of(configuration);
         Path folder = Path.of(AvroConfiguration.required(configuration, STORAGE_FOLDER)).toAbsolutePath().normalize();
         long pollInterval = AvroConfiguration.pollIntervalMillis(configuration, POLL_INTERVAL, 1);
         AvroUploadWindow window = AvroUploadWindow.of(configuration);
@@ -63,6 +65,6 @@ public final class FilesystemRawdataClientInitializer implements RawdataClientIn
         } catch (IOException e) {
             throw new RawdataException("Cannot create the storage folder " + folder, e);
         }
-        return new AvroRawdataClient(new FilesystemAvroStore(folder), window, pollInterval);
+        return new AvroRawdataClient(new FilesystemAvroStore(folder), window, limits, pollInterval);
     }
 }

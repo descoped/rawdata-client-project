@@ -6,6 +6,7 @@ import io.descoped.rawdata.api.RawdataIds;
 import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.RawdataProducer;
 import io.descoped.rawdata.api.RawdataWriterConflictException;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -167,7 +168,7 @@ class AvroTopicWriterTest {
     }
 
     private AvroRawdataClient client(GatedStore store, long maxBytes, int maxPending) {
-        return new AvroRawdataClient(store, new AvroUploadWindow(folder, 3600, maxBytes, 64, maxPending, 30, 16), 10);
+        return new AvroRawdataClient(store, new AvroUploadWindow(folder, 3600, maxBytes, 64, maxPending, 30, 16), RawdataLimits.DEFAULT, 10);
     }
 
     private static RawdataMessage message(String position, int size) {
@@ -477,7 +478,7 @@ class AvroTopicWriterTest {
     void closingWaitsAtMostTheCloseTimeout() throws Exception {
         GatedStore store = new GatedStore();
         store.gated = true;
-        AvroRawdataClient client = new AvroRawdataClient(store, new AvroUploadWindow(folder, 3600, 1 << 20, 64, 4, 1, 16), 10);
+        AvroRawdataClient client = new AvroRawdataClient(store, new AvroUploadWindow(folder, 3600, 1 << 20, 64, 4, 1, 16), RawdataLimits.DEFAULT, 10);
         RawdataProducer producer = client.producer("t");
         producer.publish(message("a", 1));
         long started = System.nanoTime();
@@ -603,7 +604,7 @@ class AvroTopicWriterTest {
     void everyReturnedCallIsInTheWindowFileWithoutASyncPerCall() throws Exception {
         GatedStore store = new GatedStore();
         try (AvroRawdataClient client = new AvroRawdataClient(store,
-                new AvroUploadWindow(folder, 3600, 1L << 30, 256, 4, 30, 16), 10)) {
+                new AvroUploadWindow(folder, 3600, 1L << 30, 256, 4, 30, 16), RawdataLimits.DEFAULT, 10)) {
             RawdataProducer producer = client.producer("t");
             List<String> published = new ArrayList<>();
             for (int call = 0; call < 7; call++) {
@@ -630,7 +631,7 @@ class AvroTopicWriterTest {
     void anInterruptedPublisherWritesForcesAndSealsAndTheWriterGoesOn() throws Exception {
         GatedStore store = new GatedStore();
         try (AvroRawdataClient client = new AvroRawdataClient(store,
-                new AvroUploadWindow(folder, 3600, 4000, 64, 4, 30, 16), 10)) {
+                new AvroUploadWindow(folder, 3600, 4000, 64, 4, 30, 16), RawdataLimits.DEFAULT, 10)) {
             RawdataProducer producer = client.producer("t");
             Thread.currentThread().interrupt();
             try {

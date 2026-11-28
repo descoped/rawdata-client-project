@@ -49,10 +49,11 @@ credentials](modules/rawdata-client-provider-s3.md#credentials-and-region-come-f
 `s3.path-style-access=false` for them. See [bucket names with
 dots](modules/rawdata-client-provider-s3.md#bucket-names-with-dots-path-style).
 
-**A metadata key, a position or a content key is refused with `IllegalArgumentException`.** The limits are the same
-in every provider: a metadata key is at most 127 bytes in UTF-8 (`RawdataMetadataClient.MAX_KEY_BYTES`), a position
-and a content key at most 2000 (`RawdataMessage.MAX_POSITION_BYTES`, `MAX_CONTENT_KEY_BYTES`), refused when the
-message is published. NUL is refused in all of them. See the [contract](contract.md).
+**A metadata key, a position or a publish call is refused with `IllegalArgumentException`.** The limits are the same
+in every provider: a metadata key is at most 127 bytes in UTF-8 (`RawdataMetadataClient.MAX_KEY_BYTES`); a position
+and a publish call are at most what `rawdata.limits.max-position-bytes` (default 2000) and
+`rawdata.limits.max-publish-bytes` (default 256 MiB) allow, checked when the call is published. Raise the limits, or
+split the call. NUL is refused in positions, keys and ordering groups. See the [contract](contract.md).
 
 **A publish throws `RawdataWriterConflictException`.** Another process published to the topic since this client last
 wrote it: only one process may write a topic. Find the other writer (two instances of a service, or an old one still

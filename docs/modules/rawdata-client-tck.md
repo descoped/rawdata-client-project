@@ -160,12 +160,16 @@ skipped with a JUnit assumption: a second writer, a writer that restarts, and a 
 
 ### One set of limits
 
-The limits are the same in every provider, the smallest that every store holds, so a topic copies between any two
-providers: a position and a content key of at most 2000 bytes in UTF-8, a metadata key of at most 127. The API checks
-them, and the TCK checks in every provider that a value at the limit, which does not compress, is stored and read
-back, and that one byte longer is refused with `IllegalArgumentException` and writes nothing
-(`aPositionOrContentKeyOverTheLimitIsRefused`, `aMetadataKeyOverTheLimitIsRefused`). A provider declares no limits
-of its own: a store that cannot hold these does not pass.
+The limits are the same in every provider for a given configuration. The application configures how long a position
+and how large a publish call may be (`spi.RawdataLimits`: `rawdata.limits.max-position-bytes`,
+`rawdata.limits.max-publish-bytes`); a metadata key is at most 127 bytes in UTF-8. The provider reads the limits with
+`RawdataLimits.of(configuration)` and checks every call with `requirePublishable`. The TCK checks in every provider
+that a position and a call exactly at configured limits are published and one byte more is refused, writing nothing
+(`theConfiguredLimitsAreTheSameInEveryProvider`); that limits out of range are refused when the client is created
+(`invalidLimitsAreRefusedWhenTheClientIsCreated`); that a 64 KiB position and content key that do not compress are
+stored, read back and found by a seek (`aLongPositionAndContentKeyAreStoredAndFound`); and the metadata key limit
+(`aMetadataKeyOverTheLimitIsRefused`). A provider declares no limits of its own: a store that cannot hold these does
+not pass.
 
 ### A store that does not exist
 
@@ -366,8 +370,8 @@ configuration](rawdata-client-provider-avro.md#configuration) and in
 | The four tests with a second client are skipped | `clientsShareTheStore()` returns false | return false only if each client really has its own store |
 | `aStoreThatDoesNotExistFails` is skipped | `missingStoreConfiguration()` returns null | give a store that cannot exist; if the provider creates missing folders, point it at a folder inside a regular file |
 | `aStoreThatDoesNotExistFails` fails on an assertion | a missing store reads as empty | throw `RawdataException` (or `IOException` from an `AvroStore`) when the database, bucket or folder is missing |
-| `aMetadataKeyOverTheLimitIsRefused` or `aPositionOrContentKeyOverTheLimitIsRefused` fails at the limit | the store cannot hold a value of the common limit | store it so that it can: the limits are the same for every provider |
-| It fails one byte over | the provider does not check with `RawdataMetadataClient.requireValidKey` or `RawdataLimits.requirePublishable` | call them before the store is used |
+| `aMetadataKeyOverTheLimitIsRefused` or `aLongPositionAndContentKeyAreStoredAndFound` fails | the store cannot hold a long key or position | store it so that it can: the limits are the same for every provider |
+| A limit test fails one byte over, or `invalidLimitsAreRefusedWhenTheClientIsCreated` fails | the provider does not read `RawdataLimits.of(configuration)`, or does not check with `requireValidKey` and `requirePublishable` | read the limits in `initialize`, and call the checks before the store is used |
 | Many Avro tests fail with a `RawdataException` saying the folder is in use | `configuration()` returns the same `local-temp-folder` on every call | return a new folder per call |
 | A test waits about 30 seconds and fails on null | `avro-file.max.seconds` is the default 60, so only the timer would upload the window | set it to `1` in `configuration()` |
 | A test times out after 60 seconds | a `receive` that is never woken, or a close that waits forever | closing a consumer or the client must wake a waiting `receive` |
@@ -444,7 +448,7 @@ Types from other modules that the TCK relies on:
 | Type | Module | Used for |
 |---|---|---|
 | `RawdataClient.PROVIDER_KEY` (`rawdata.client.provider`) | API | choosing the provider in `configuration()` |
-| `RawdataMetadataClient.MAX_KEY_BYTES` (127), `RawdataMessage.MAX_POSITION_BYTES`, `MAX_CONTENT_KEY_BYTES` (2000) | API | the limits, the same in every provider |
+| `RawdataMetadataClient.MAX_KEY_BYTES` (127), `spi.RawdataLimits` | API | the limits, the same in every provider |
 | `RawdataWriterConflictException.topic()` | API | the topic of a writer conflict |
 | `AvroRawdataClient.flush(String topic)` | Avro engine | `awaitPublished` for providers on the engine |
 | `AvroUploadWindow` key constants | Avro engine | the upload window tests |

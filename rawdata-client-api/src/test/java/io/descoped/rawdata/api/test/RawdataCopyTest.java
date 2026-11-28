@@ -5,6 +5,7 @@ import io.descoped.rawdata.api.RawdataConsumer;
 import io.descoped.rawdata.api.RawdataCopy;
 import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.RawdataProducer;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -54,6 +55,50 @@ class RawdataCopyTest {
                 assertEquals(1000, RawdataCopy.copy(from, to, 64, Duration.ZERO));
             }
             assertEquals(readAll(source, "t"), readAll(target, "t"));
+        }
+    }
+
+    @Test
+    void splitsABatchSoEachCallFitsTheTargetsPublishLimit() throws Exception {
+        Map<String, String> small = Map.of(RawdataClient.PROVIDER_KEY, "memory",
+                RawdataLimits.MAX_POSITION_BYTES, "100", RawdataLimits.MAX_PUBLISH_BYTES, "1000");
+        try (RawdataClient source = memory(); RawdataClient target = RawdataClient.create(small)) {
+            try (RawdataProducer producer = source.producer("t")) {
+                for (int i = 0; i < 10; i++) {
+                    producer.publish(RawdataMessage.builder().position("p" + i).put("v", new byte[300]).build());
+                }
+            }
+            List<Integer> batches = new ArrayList<>();
+            RawdataProducer counting = new ForwardingProducer(target.producer("t")) {
+                @Override
+                public void publish(RawdataMessage... messages) {
+                    batches.add(messages.length);
+                    super.publish(messages);
+                }
+            };
+            RawdataLimits limits = RawdataLimits.of(small);
+            try (RawdataConsumer from = source.consumer("t")) {
+                assertEquals(10, RawdataCopy.copy(from, counting, 1000, limits, Duration.ZERO));
+            }
+            assertEquals(List.of(2, 2, 2, 2, 2), batches, "each message counts 345 bytes, so two fit in 1000");
+            assertEquals(readAll(source, "t"), readAll(target, "t"));
+        }
+    }
+
+    @Test
+    void aMessageTooLargeForTheTargetFailsTheCopy() throws Exception {
+        Map<String, String> small = Map.of(RawdataClient.PROVIDER_KEY, "memory",
+                RawdataLimits.MAX_POSITION_BYTES, "100", RawdataLimits.MAX_PUBLISH_BYTES, "1000");
+        try (RawdataClient source = memory(); RawdataClient target = RawdataClient.create(small)) {
+            fill(source, "t", 1);
+            try (RawdataProducer producer = source.producer("t")) {
+                producer.publish(RawdataMessage.builder().position("big").put("v", new byte[2000]).build());
+            }
+            RawdataLimits limits = RawdataLimits.of(small);
+            try (RawdataConsumer from = source.consumer("t"); RawdataProducer to = target.producer("t")) {
+                assertThrows(IllegalArgumentException.class, () -> RawdataCopy.copy(from, to, 1, limits, Duration.ZERO));
+            }
+            assertEquals(1, readAll(target, "t").size(), "the message before it is copied");
         }
     }
 

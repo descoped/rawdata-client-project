@@ -162,7 +162,9 @@ then has a gap compared with the source, which is what you asked for.
 ### Batches
 
 The tool reads the source in batches of up to `--batch-size` messages (default 1000) and publishes each batch to the
-target in one `publish` call. One call is written whole or not at all, so the target never holds part of a batch.
+target in as few `publish` calls as the target's publish limit allows (`rawdata.limits.max-publish-bytes` under
+`target.`), usually one. A call is written whole or not at all, so the target never holds part of a call. A message
+too large for the target's limits stops the copy with an error.
 Memory use is bounded by one batch, plus what the target provider buffers (see below).
 
 What a batch becomes in the target depends on the provider:
@@ -237,8 +239,8 @@ Step by step, for each run:
 4. **Per topic.** For each topic in the order given:
    1. The target topic's last message is read. The start rule in the table above picks where the source consumer
       starts: exclusively after the target's last id, inclusively at a start point, or at the beginning.
-   2. `RawdataCopy.copy(consumer, producer, batchSize, idleTimeout)` pulls batches with `receiveUpTo` and publishes
-      each with the source ids, until a receive returns nothing within the idle timeout.
+   2. `RawdataCopy.copy(consumer, producer, batchSize, targetLimits, idleTimeout)` pulls batches with `receiveUpTo`
+      and publishes each with the source ids, in calls that fit the target's publish limit, until a receive returns nothing within the idle timeout.
    3. The consumer and the producer are closed. Closing the producer of a `filesystem`, `gcs` or `s3` target uploads
       the open window and waits for every upload of the topic, for at most `avro-file.close-timeout-seconds`
       (default 30). When it returns, everything copied is visible and durable in the target.

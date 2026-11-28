@@ -25,9 +25,13 @@ final class PostgresRawdataConsumer extends PollingRawdataConsumer {
 
     @Override
     protected void fill(Deque<RawdataMessage> buffer) {
+        PostgresTopics.Topic tables = client.topics().find(topic());
+        if (tables == null) {
+            return; // not written yet: nothing to read, and no tables to create
+        }
         PostgresCursor from = position;
         buffer.addAll(client.jdbc().transaction("read topic " + topic(), connection ->
-                PostgresMessages.after(connection, topic(), from.id, from.inclusive, prefetchSize)));
+                PostgresMessages.after(connection, tables, from.id, from.inclusive, prefetchSize)));
         if (!buffer.isEmpty()) {
             position = new PostgresCursor(buffer.peekLast().id(), false);
         }

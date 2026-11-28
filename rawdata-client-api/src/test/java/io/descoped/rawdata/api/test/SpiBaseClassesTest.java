@@ -4,6 +4,7 @@ import io.descoped.rawdata.api.RawdataClosedException;
 import io.descoped.rawdata.api.RawdataIds;
 import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.spi.OrderedRawdataProducer;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 import io.descoped.rawdata.api.spi.PollingRawdataConsumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -366,7 +367,7 @@ class SpiBaseClassesTest {
         volatile Executor asyncExecutor = executor;
 
         ListProducer() {
-            super("t");
+            super("t", RawdataLimits.DEFAULT);
         }
 
         @Override

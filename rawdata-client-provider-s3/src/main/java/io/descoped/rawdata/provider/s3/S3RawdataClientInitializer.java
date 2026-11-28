@@ -2,6 +2,7 @@ package io.descoped.rawdata.provider.s3;
 
 import io.descoped.rawdata.api.RawdataClient;
 import io.descoped.rawdata.api.RawdataClientInitializer;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 import io.descoped.rawdata.provider.avro.AvroConfiguration;
 import io.descoped.rawdata.provider.avro.AvroRawdataClient;
 import io.descoped.rawdata.provider.avro.AvroUploadWindow;
@@ -97,6 +98,7 @@ public final class S3RawdataClientInitializer implements RawdataClientInitialize
 
     @Override
     public RawdataClient initialize(Map<String, String> configuration) {
+        RawdataLimits limits = RawdataLimits.of(configuration);
         String bucket = AvroConfiguration.required(configuration, BUCKET);
         String prefix = AvroConfiguration.prefix(configuration, PREFIX);
         long pollInterval = AvroConfiguration.pollIntervalMillis(configuration, POLL_INTERVAL, 1);
@@ -134,7 +136,7 @@ public final class S3RawdataClientInitializer implements RawdataClientInitialize
             }
             throw e;
         }
-        return new AvroRawdataClient(new S3AvroStore(s3, bucket, prefix, encryption, kmsKeyId, closeable, throttling), window, pollInterval);
+        return new AvroRawdataClient(new S3AvroStore(s3, bucket, prefix, encryption, kmsKeyId, closeable, throttling), window, limits, pollInterval);
     }
 
     private static boolean pathStyle(Map<String, String> configuration, String bucket) {

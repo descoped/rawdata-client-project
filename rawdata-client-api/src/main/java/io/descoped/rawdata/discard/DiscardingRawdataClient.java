@@ -32,8 +32,13 @@ final class DiscardingRawdataClient implements RawdataClient {
     private static final RawdataCursor CURSOR = new RawdataCursor() {
     };
 
+    private final RawdataLimits limits;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final Set<DiscardingConsumer> consumers = ConcurrentHashMap.newKeySet();
+
+    DiscardingRawdataClient(RawdataLimits limits) {
+        this.limits = Objects.requireNonNull(limits, "limits");
+    }
 
     @Override
     public RawdataProducer producer(String topic) {
@@ -48,7 +53,7 @@ final class DiscardingRawdataClient implements RawdataClient {
 
             @Override
             public void publish(RawdataMessage... messages) {
-                RawdataLimits.requirePublishable(messages); // refused as in every provider, though nothing is kept
+                limits.requirePublishable(messages); // refused as in every provider, though nothing is kept
                 if (isClosed()) {
                     throw new RawdataClosedException("producer of topic " + name + " is closed");
                 }

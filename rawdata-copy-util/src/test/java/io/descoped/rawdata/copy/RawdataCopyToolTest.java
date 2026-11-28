@@ -5,6 +5,7 @@ import io.descoped.rawdata.api.RawdataConsumer;
 import io.descoped.rawdata.api.RawdataIds;
 import io.descoped.rawdata.api.RawdataMessage;
 import io.descoped.rawdata.api.RawdataProducer;
+import io.descoped.rawdata.api.spi.RawdataLimits;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -22,6 +23,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -108,6 +110,26 @@ class RawdataCopyToolTest {
         assertEquals("a -> a: 25 messages\nb -> renamed: 3 messages\n", out().replace(System.lineSeparator(), "\n"));
         assertEquals(read(source, "a"), read(target, "a"));
         assertEquals(read(source, "b"), read(target, "renamed"));
+    }
+
+    /**
+     * The tool takes the target's limits from {@code target.*}: messages that together exceed the target's publish
+     * limit are copied in calls that fit it.
+     */
+    @Test
+    void publishesInCallsThatFitTheTargetsPublishLimit() throws Exception {
+        Map<String, String> source = filesystem("source");
+        Map<String, String> target = new HashMap<>(filesystem("target"));
+        target.put(RawdataLimits.MAX_POSITION_BYTES, "100");
+        target.put(RawdataLimits.MAX_PUBLISH_BYTES, "1000");
+        try (RawdataClient client = RawdataClient.create(source); RawdataProducer producer = client.producer("a")) {
+            for (int i = 0; i < 10; i++) {
+                producer.publish(RawdataMessage.builder().position("m" + i).put("v", new byte[300]).build());
+            }
+        }
+        Path config = config(source, target);
+        assertEquals(RawdataCopyTool.OK, run("--config", config.toString(), "--idle-timeout-ms", "200", "a"), err());
+        assertEquals(read(source, "a"), read(target, "a"));
     }
 
     /**

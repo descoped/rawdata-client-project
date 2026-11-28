@@ -122,11 +122,11 @@ minute for the messages.
 ### The storage folder
 
 `filesystem.storage-folder` is the root of every topic the client sees. Each topic is a folder in it. The provider
-creates the storage folder, and any missing parent, when the client is created, and never after that: a storage
-folder that is removed or unmounted while a client runs fails every read and write with `RawdataException`, as a
-missing bucket does, instead of reading as empty topics or being created again with part of a topic. Several clients, in one process or
-in many, may point at the same storage folder: each reads every topic in it, and one of them writes each topic (see
-[one writer per topic](#one-writer-per-topic)).
+creates the storage folder, and any missing parent, when the client is created, and never after that: a storage folder
+that is removed or unmounted while a client runs fails every read and write with `RawdataException`, as a missing bucket
+does, instead of reading as empty topics or being created again with part of a topic. Several clients, in one process or
+in many, may point at the same storage folder: each reads every topic in it, and one of them writes each topic (see [one
+writer per topic](#one-writer-per-topic)).
 
 ### The topic folder
 
@@ -311,12 +311,12 @@ engine](rawdata-client-provider-avro.md#how-it-works) page.
   complete blocks, and sets aside what no longer belongs. A temporary `.*.tmp` file in a topic folder can also be
   left, when the crash came between writing it and linking it. Nothing reads it, and it may be deleted.
 - **What survives a crash of the machine.** The buffer is forced to disk (`fsync`) every `avro-file.sync.interval`
-  bytes, and sealed windows when they seal; the calls since the last force may be lost. The store forces its own
-  writes before it reports them done: a segment's or metadata entry's temporary file is forced (`fsync`) before it is
-  linked or moved to its name, and the folder that holds the name after that, as is each folder the store creates (not on Windows, which cannot open a
-  folder for it). So a segment is on disk before its window leaves the buffer, and an uploaded window survives a power
-  loss, as in gcs and s3. That is two `fsync` calls per uploaded window, not per publish. On macOS `force` is `fsync`,
-  which leaves the drive's own cache to the drive.
+  bytes, and sealed windows when they seal; the calls since the last force may be lost. The store forces its own writes
+  before it reports them done: a segment's or metadata entry's temporary file is forced (`fsync`) before it is linked or
+  moved to its name, and the folder that holds the name after that, as is each folder the store creates (not on Windows,
+  which cannot open a folder for it). So a segment is on disk before its window leaves the buffer, and an uploaded
+  window survives a power loss, as in gcs and s3. That is two `fsync` calls per uploaded window, not per publish. On
+  macOS `force` is `fsync`, which leaves the drive's own cache to the drive.
 
 ### The read path
 

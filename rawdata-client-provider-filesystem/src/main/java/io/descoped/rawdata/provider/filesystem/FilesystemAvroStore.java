@@ -183,9 +183,15 @@ final class FilesystemAvroStore implements AvroStore {
     /**
      * The storage folder must be there: a missing one is a missing store, never empty topics.
      */
-    private void requireFolder() throws NoSuchFileException {
-        if (!Files.isDirectory(folder)) {
+    private void requireFolder() throws IOException {
+        BasicFileAttributes attributes;
+        try {
+            attributes = Files.readAttributes(folder, BasicFileAttributes.class); // any other failure is its own cause
+        } catch (NoSuchFileException e) {
             throw new NoSuchFileException(folder.toString(), null, "the storage folder does not exist");
+        }
+        if (!attributes.isDirectory()) {
+            throw new NoSuchFileException(folder.toString(), null, "the storage folder is not a folder");
         }
     }
 

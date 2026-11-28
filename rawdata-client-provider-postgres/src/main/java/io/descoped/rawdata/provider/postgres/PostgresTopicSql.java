@@ -11,6 +11,7 @@ final class PostgresTopicSql {
 
     private static final String TABLE_PREFIX = "rawdata_";
     private static final String CREATE_TABLE = "CREATE TABLE ";
+    private static final String INSERT_INTO = "INSERT INTO ";
     private static final String COLUMNS = "SELECT m.id, m.position, m.ordering_group, m.sequence_number, c.name, c.data FROM (";
     private static final String MESSAGE_COLUMNS = "SELECT id, position, ordering_group, sequence_number FROM ";
     private static final String IN_ORDER = "ORDER BY m.id, c.ordinal";
@@ -65,8 +66,8 @@ final class PostgresTopicSql {
                         + "name varchar COLLATE \"C\" PRIMARY KEY, "
                         + "data bytea NOT NULL)");
         lastId = "SELECT id FROM " + message + " ORDER BY id DESC LIMIT 1";
-        insertMessage = "INSERT INTO " + message + " (id, position, ordering_group, sequence_number) VALUES (?, ?, ?, ?)";
-        insertContent = "INSERT INTO " + content + " (id, ordinal, name, data) VALUES (?, ?, ?, ?)";
+        insertMessage = INSERT_INTO + message + " (id, position, ordering_group, sequence_number) VALUES (?, ?, ?, ?)";
+        insertContent = INSERT_INTO + content + " (id, ordinal, name, data) VALUES (?, ?, ?, ?)";
         String withContent = ") m LEFT JOIN " + content + " c ON c.id = m.id ";
         after = COLUMNS + MESSAGE_COLUMNS + message + " WHERE id > ? ORDER BY id LIMIT ?" + withContent + IN_ORDER;
         from = COLUMNS + MESSAGE_COLUMNS + message + " WHERE id >= ? ORDER BY id LIMIT ?" + withContent + IN_ORDER;
@@ -77,7 +78,7 @@ final class PostgresTopicSql {
                 + " AND position = ? AND id >= ? AND id < ? ORDER BY id LIMIT 1";
         metadataKeys = "SELECT name FROM " + metadata + " ORDER BY name";
         metadataGet = "SELECT data FROM " + metadata + " WHERE name = ?";
-        metadataPut = "INSERT INTO " + metadata + " (name, data) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET data = EXCLUDED.data";
+        metadataPut = INSERT_INTO + metadata + " (name, data) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET data = EXCLUDED.data";
         metadataRemove = "DELETE FROM " + metadata + " WHERE name = ?";
     }
 }

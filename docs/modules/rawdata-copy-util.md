@@ -131,8 +131,9 @@ messages, with the same ids, in the source's read order.
 ### Resuming after the target's last id
 
 Because the ids are kept and the target is written in the source's read order, the target's last message says how
-far an earlier copy came. Before it copies a topic, the tool reads the target topic's last message
-(`RawdataClient.lastMessage`). If there is one, the copy starts at the first source message after that id. That is
+far an earlier copy came. Before it copies a topic, the tool opens the target's producer and then reads the target
+topic's last message (`RawdataClient.lastMessage`), which, once a producer exists, includes what a killed earlier run
+left in the target's upload buffer. If there is one, the copy starts at the first source message after that id. That is
 what makes a copy safe to run again: after a failure, after a crash, or to pick up what the source received since.
 
 The rule has a consequence that matters when you move a running system: **nothing but the tool may write to a target
@@ -213,7 +214,7 @@ flowchart TD
     C -->|no provider key, provider refuses, store does not answer| U
     C --> D{next topic}
     D -->|none left| OK[close both clients, exit 0]
-    D --> E["last = target.lastMessage(target topic)"]
+    D --> E["open the target's producer, then last = target.lastMessage(target topic)"]
     E --> F["choose the start: after last, or the start point, or the beginning"]
     F --> G["RawdataCopy.copy: receiveUpTo(batch, idle timeout), publish, repeat until a receive is empty"]
     G --> H[close the consumer and the producer]
@@ -235,23 +236,29 @@ Step by step, for each run:
    without `rawdata.client.provider` is a usage error that names the missing key.
 3. **Clients.** The source client is created, then the target client. Any exception from a provider here (an unknown
    provider, a missing required key, a database that does not answer) is reported as
-   `Cannot open the source store: ...` or `Cannot open the target store: ...`, with exit status 2.
+   `Cannot open the source store: ...` or `Cannot open the target store: ...`, with exit status 2, without the
+   usage text, since the arguments were right.
 4. **Per topic.** For each topic in the order given:
-   1. The target topic's last message is read. The start rule in the table above picks where the source consumer
-      starts: exclusively after the target's last id, inclusively at a start point, or at the beginning.
+   1. The target's producer is opened, then the target topic's last message is read: with a producer, it includes
+      windows a killed earlier run left in the upload buffer, which the producer uploads. The start rule in the table
+      above picks where the source consumer starts: exclusively after the target's last id, inclusively at a start
+      point, or at the beginning.
    2. `RawdataCopy.copy(consumer, producer, batchSize, targetLimits, idleTimeout)` pulls batches with `receiveUpTo`
-      and publishes each with the source ids, in calls that fit the target's publish limit, until a receive returns nothing within the idle timeout.
+      and publishes each with the source ids, in calls that fit the target's publish limit, until a receive returns
+      nothing within the idle timeout.
    3. The consumer and the producer are closed. Closing the producer of a `filesystem`, `gcs` or `s3` target uploads
       the open window and waits for every upload of the topic, for at most `avro-file.close-timeout-seconds`
       (default 30). When it returns, everything copied is visible and durable in the target.
    4. With `--metadata`, the entries are copied.
    5. One report line goes to standard output.
-5. **The end.** Both clients are closed, the target first, and the tool exits.
+5. **The end.** Both clients are closed, the target first, each on its own, and the tool exits. A failure to close
+   the target (its uploads did not finish) is printed and makes the exit status 1; a failure to close the source is
+   printed only.
 
-The first failure ends the run. The error goes to standard error as
-`rawdata-copy: <source> -> <target>: copy failed; run again to continue: <exception>`, and the topics after it are not
-tried. Topics before it are complete. In the failed topic, every batch that was published is in the target (or in the
-target's upload buffer, see below), and the next run continues after it.
+The first failure ends the run. The error goes to standard error as `rawdata-copy: <source> -> <target>: copy failed;
+run again to continue: <type>: <message>`, followed by an indented `caused by:` or `suppressed:` line for each cause and
+suppressed failure; the topics after it are not tried. Topics before it are complete. In the failed topic, every batch
+that was published is in the target (or in the target's upload buffer, see below), and the next run continues after it.
 
 ### The report line
 
@@ -425,9 +432,8 @@ what the target has. Typical causes:
 - A `RawdataException` from closing an Avro-engine producer: the uploads did not finish within
   `avro-file.close-timeout-seconds`. The windows not uploaded stay in the target's `local-temp-folder` and are
   uploaded by the next run.
-- `IllegalArgumentException` from a metadata `put`: the key is longer than the target allows, for example a key over
-  127 bytes copied from `postgres` to `filesystem` (see [Metadata](../contract.md#metadata)). The messages are
-  copied; copy without `--metadata`, or shorten the keys in the source.
+- `IllegalArgumentException` from a publish: a message does not fit the target's limits (`rawdata.limits.*` under
+  `target.`), which are lower than the source's. Raise the target's limits to at least the source's.
 - `RawdataDuplicateIdException`: the source holds two different messages under one id, which a `filesystem`, `gcs` or
   `s3` topic written before 3.1.0 can. The target refuses the second. Give the source's messages unique ids. A message
   the target already holds is not a failure: copying it again is a no-op, so a run after a crash copies nothing
@@ -444,8 +450,8 @@ run, and do not point a second process at it at the same time (it is locked).
 **`0 messages` where you expected some.** Check:
 
 - the target already had the messages: the line says `after <id>`;
-- the source part points at the right store. A `filesystem` source creates a missing `filesystem.storage-folder`,
-  so a misspelt path reads as empty topics rather than failing;
+- the source part points at the right store. A `filesystem` source creates a missing `filesystem.storage-folder`
+  when the client starts, so a misspelt path reads as empty topics rather than failing;
 - the source messages are visible: an Avro-engine source shows a message only once its producer uploaded it;
 - a start point after the last source message.
 
@@ -507,7 +513,7 @@ reactor (`rawdata-copy-util/target/site/jacoco-aggregate`). See [Building and te
 | | `public static final int OK = 0` | every topic was copied |
 | | `public static final int FAILED = 1` | a copy failed; run again to continue |
 | | `public static final int USAGE = 2` | wrong arguments or configuration, or a store that cannot be opened |
-| [`RawdataCopy`](../../rawdata-client-api/src/main/java/io/descoped/rawdata/api/RawdataCopy.java) (API) | `public static long copy(RawdataConsumer from, RawdataProducer to, int batchSize, Duration idleTimeout) throws InterruptedException` | the copy loop the tool runs; returns the number of messages copied |
+| [`RawdataCopy`](../../rawdata-client-api/src/main/java/io/descoped/rawdata/api/RawdataCopy.java) (API) | `public static long copy(RawdataConsumer from, RawdataProducer to, int batchSize, RawdataLimits targetLimits, Duration idleTimeout) throws InterruptedException` | the copy loop the tool runs, in calls that fit the target's publish limit; returns the number of messages copied |
 
 The module exports no package ([`module-info.java`](../../rawdata-copy-util/src/main/java/module-info.java)), so
 `run` can be called from code only on the class path. To copy from an application, use `RawdataCopy.copy`.

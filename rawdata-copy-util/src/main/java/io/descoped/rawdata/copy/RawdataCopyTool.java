@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -118,17 +119,26 @@ public final class RawdataCopyTool {
         }
         RawdataClient from = null;
         RawdataClient to = null;
+        int status = FAILED;
         try {
             from = client(configuration, "source.");
             to = client(configuration, "target.");
-            options.targetLimits = RawdataLimits.of(part(configuration, "target."));
-            return copyAll(from, to, options, out, err);
-        } catch (IllegalArgumentException | UncheckedConfigurationException e) {
-            return usage(err, e.getMessage());
+            status = copyAll(from, to, RawdataLimits.of(part(configuration, "target.")), options, out, err);
+        } catch (UncheckedConfigurationException e) {
+            // the arguments were right; the store could not be opened
+            err.println(PREFIX + e.getMessage() + causes(e));
+            status = USAGE;
+        } catch (IllegalArgumentException e) {
+            status = usage(err, e.getMessage());
         } finally {
-            close(to);
-            close(from);
+            // each client is closed apart, the target first: closing it uploads its open windows, so a failure there
+            // fails the run, and never keeps the source from being closed
+            if (!close(to, "target", err) && status == OK) {
+                status = FAILED;
+            }
+            close(from, "source", err);
         }
+        return status;
     }
 
     /**
@@ -142,33 +152,40 @@ public final class RawdataCopyTool {
         }
     }
 
-    private static int copyAll(RawdataClient from, RawdataClient to, Options options, PrintStream out, PrintStream err) {
+    private static int copyAll(RawdataClient from, RawdataClient to, RawdataLimits targetLimits, Options options,
+                               PrintStream out, PrintStream err) {
         for (Options.Topic topic : options.topics) {
             try {
-                out.println(copy(from, to, topic, options));
+                out.println(copy(from, to, targetLimits, topic, options));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 err.println(PREFIX + topic + ": interrupted; run again to continue");
                 return FAILED;
             } catch (RuntimeException e) {
-                err.println(PREFIX + topic + ": copy failed; run again to continue: " + e);
+                err.println(PREFIX + topic + ": copy failed; run again to continue: " + describe(e));
                 return FAILED;
             }
         }
         return OK;
     }
 
-    private static String copy(RawdataClient from, RawdataClient to, Options.Topic topic, Options options) throws InterruptedException {
+    private static String copy(RawdataClient from, RawdataClient to, RawdataLimits targetLimits, Options.Topic topic,
+                               Options options) throws InterruptedException {
         UUID start = options.fromId;
         if (start == null && options.fromTime != null) {
             start = RawdataIds.beginningOf(options.fromTime);
         }
-        RawdataMessage last = to.lastMessage(topic.target());
-        boolean resume = last != null && (start == null || RawdataIds.ORDER.compare(last.id(), start) >= 0);
+        RawdataMessage last;
+        boolean resume;
         long messages;
-        try (RawdataConsumer consumer = consumer(from, topic.source(), resume ? last.id() : start, !resume);
-             RawdataProducer producer = to.producer(topic.target())) {
-            messages = RawdataCopy.copy(consumer, producer, options.batchSize, options.targetLimits, options.idleTimeout);
+        // the producer first: once a client has a producer of a topic, lastMessage holds everything the topic will
+        // hold, windows a killed earlier run left behind included, so the copy resumes after them, not before
+        try (RawdataProducer producer = to.producer(topic.target())) {
+            last = to.lastMessage(topic.target());
+            resume = last != null && (start == null || RawdataIds.ORDER.compare(last.id(), start) >= 0);
+            try (RawdataConsumer consumer = consumer(from, topic.source(), resume ? last.id() : start, !resume)) {
+                messages = RawdataCopy.copy(consumer, producer, options.batchSize, targetLimits, options.idleTimeout);
+            }
         }
         StringBuilder report = new StringBuilder().append(topic).append(": ").append(plural(messages, "message", "messages"));
         if (resume) {
@@ -224,9 +241,62 @@ public final class RawdataCopyTool {
         }
     }
 
-    private static void close(RawdataClient client) {
-        if (client != null) {
+    /**
+     * Closes a client, reporting a failure instead of throwing it.
+     *
+     * @return whether it closed without failing
+     */
+    private static boolean close(RawdataClient client, String which, PrintStream err) {
+        if (client == null) {
+            return true;
+        }
+        try {
             client.close();
+            return true;
+        } catch (RuntimeException e) {
+            err.println(PREFIX + "closing the " + which + " failed: " + describe(e));
+            return false;
+        }
+    }
+
+    /**
+     * A failure for the error line: its type and message, then its suppressed failures and causes, each on a line.
+     */
+    static String describe(Throwable failure) {
+        StringBuilder text = new StringBuilder();
+        describe(failure, "", text, new IdentityHashMap<>());
+        return text.toString();
+    }
+
+    /**
+     * The causes of a failure whose own message is already printed, each on a line.
+     */
+    private static String causes(Throwable failure) {
+        StringBuilder text = new StringBuilder();
+        Map<Throwable, Boolean> seen = new IdentityHashMap<>();
+        seen.put(failure, Boolean.TRUE);
+        related(failure, "", text, seen);
+        return text.toString();
+    }
+
+    private static void describe(Throwable failure, String indent, StringBuilder text, Map<Throwable, Boolean> seen) {
+        seen.put(failure, Boolean.TRUE);
+        String message = failure.getMessage();
+        text.append(failure.getClass().getSimpleName()).append(message == null ? "" : ": " + message);
+        related(failure, indent, text, seen);
+    }
+
+    private static void related(Throwable failure, String indent, StringBuilder text, Map<Throwable, Boolean> seen) {
+        for (Throwable suppressed : failure.getSuppressed()) {
+            if (!seen.containsKey(suppressed)) {
+                text.append(System.lineSeparator()).append(indent).append("  suppressed: ");
+                describe(suppressed, indent + "  ", text, seen);
+            }
+        }
+        Throwable cause = failure.getCause();
+        if (cause != null && !seen.containsKey(cause)) {
+            text.append(System.lineSeparator()).append(indent).append("  caused by: ");
+            describe(cause, indent + "  ", text, seen);
         }
     }
 
@@ -291,7 +361,6 @@ public final class RawdataCopyTool {
         UUID fromId;
         Long fromTime;
         int batchSize = 1000;
-        RawdataLimits targetLimits = RawdataLimits.DEFAULT;
         Duration idleTimeout = Duration.ofSeconds(1);
         final List<Topic> topics = new ArrayList<>();
 

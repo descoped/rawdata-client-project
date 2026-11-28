@@ -18,18 +18,30 @@ import java.util.TreeSet;
  * <p>
  * Every upload carries its CRC32C ({@code X-Goog-Hash}), so GCS refuses bytes damaged on the way. The client retries
  * a failed upload. If an upload succeeded but its response was lost, the retry fails its precondition; the store then
- * compares the object's size and CRC32C with its own, and only if they match reads the object. If it holds the bytes
+ * compares the object's size and CRC32C with its own, and only if they match reads that generation, in ranges. If it holds the bytes
  * it uploaded (an Avro file carries a random sync marker, so no other writer's file is the same) the segment counts
  * as created. Another writer's segment is so told apart without downloading it.
  * <p>
  * A metadata entry is written with a precondition on the generation it replaces (or that there is none), so the client
  * may retry the upload, for example when GCS limits writes to one object name to about one per second. When another
- * writer changed the entry meanwhile, the write starts over, so the last write wins.
+ * writer changed the entry meanwhile, the write starts over, so the last write wins; after 10 rounds that each lost, it
+ * gives up with an {@link IOException} naming the object.
  * <p>
- * GCS answers 404 for a missing object and for a missing bucket. The first time the store gets one, it lists the
- * bucket once, so a wrong bucket fails instead of looking like an empty topic.
+ * GCS answers 404 for a missing object and for a missing bucket. The first time the store gets one, on a read or a
+ * delete, it lists the bucket once, so a wrong bucket fails instead of looking like an empty topic or a removal that
+ * succeeded.
  */
 final class GcsAvroStore implements AvroStore {
+
+    /**
+     * The range a taken segment is compared in.
+     */
+    private static final int COMPARE_RANGE = 8 * 1024 * 1024;
+
+    /**
+     * How many times a metadata write is tried while the entry keeps changing under it.
+     */
+    private static final int METADATA_ROUNDS = 10;
 
     private final GcsClient client;
     private final String bucket;
@@ -55,7 +67,21 @@ final class GcsAvroStore implements AvroStore {
                 || stored.get().crc32c() != null && !stored.get().crc32c().equals(AvroChecksums.crc32c(content))) {
             return false;
         }
-        return client.download(bucket, name).map(bytes -> Arrays.equals(content, bytes)).orElse(false);
+        return sameBytes(name, stored.get().generation(), content);
+    }
+
+    /**
+     * Whether a stored generation holds these bytes, compared a range at a time, never read whole into memory.
+     */
+    private boolean sameBytes(String name, long generation, byte[] content) throws IOException {
+        for (int offset = 0; offset < content.length; offset += COMPARE_RANGE) {
+            int length = Math.min(COMPARE_RANGE, content.length - offset);
+            byte[] stored = client.downloadRange(bucket, name, generation, offset, length);
+            if (!Arrays.equals(content, offset, offset + length, stored, 0, length)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override
@@ -137,18 +163,22 @@ final class GcsAvroStore implements AvroStore {
     @Override
     public void writeMetadata(String topic, String name, byte[] value) throws IOException {
         String object = metadata(topic, name);
-        for (; ; ) {
+        for (int round = 0; round < METADATA_ROUNDS; round++) {
             OptionalLong current = client.generation(bucket, object);
             if (client.upload(bucket, object, "application/octet-stream", value, current.orElse(0), false)) {
                 return;
             }
             // another writer changed the entry meanwhile; write again over its value
         }
+        throw new IOException("Writing " + object + " failed: it changed under every one of " + METADATA_ROUNDS
+                + " writes");
     }
 
     @Override
     public void deleteMetadata(String topic, String name) throws IOException {
-        client.delete(bucket, metadata(topic, name));
+        if (!client.delete(bucket, metadata(topic, name))) {
+            checkBucket(); // a 404 is a missing object or a missing bucket
+        }
     }
 
     @Override

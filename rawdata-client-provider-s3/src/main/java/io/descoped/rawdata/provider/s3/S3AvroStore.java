@@ -3,9 +3,10 @@ package io.descoped.rawdata.provider.s3;
 import io.descoped.rawdata.provider.avro.AvroChecksums;
 import io.descoped.rawdata.provider.avro.AvroStore;
 import software.amazon.awssdk.awscore.exception.AwsServiceException;
+import software.amazon.awssdk.core.exception.AbortedException;
 import software.amazon.awssdk.core.exception.SdkException;
-import software.amazon.awssdk.utils.SdkAutoCloseable;
 import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.http.ContentStreamProvider;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.ChecksumMode;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
@@ -14,6 +15,7 @@ import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Object;
 import software.amazon.awssdk.services.s3.model.ServerSideEncryption;
+import software.amazon.awssdk.utils.SdkAutoCloseable;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
@@ -95,7 +97,10 @@ final class S3AvroStore implements AvroStore {
         for (int conflicts = 0; ; conflicts++) {
             try {
                 s3.putObject(put(key, "avro/binary").ifNoneMatch("*").checksumCRC32C(AvroChecksums.crc32c(content)).build(),
-                        RequestBody.fromBytes(content)); // S3 refuses the put if the bytes it got differ
+                        // the engine's own array, read on each attempt and never copied: the engine reads each window into
+                        // a new array and never changes it during its upload; S3 refuses the put if the bytes it got differ
+                        RequestBody.fromContentProvider(ContentStreamProvider.fromByteArrayUnsafe(content), content.length,
+                                "avro/binary"));
                 return true;
             } catch (AwsServiceException e) {
                 if (e.statusCode() == PRECONDITION_FAILED) {
@@ -298,7 +303,16 @@ final class S3AvroStore implements AvroStore {
         }
     }
 
+    /**
+     * A call that failed, as an {@link IOException} naming it; an interrupt, which the SDK reports as
+     * {@link AbortedException}, as an {@link InterruptedIOException}, as the engine's other stores give it.
+     */
     private static IOException failed(String what, SdkException e) {
+        if (e instanceof AbortedException || Thread.currentThread().isInterrupted()) {
+            InterruptedIOException interrupted = new InterruptedIOException(what + " was interrupted");
+            interrupted.initCause(e);
+            return interrupted;
+        }
         return new IOException(what + " failed: " + e.getMessage(), e);
     }
 

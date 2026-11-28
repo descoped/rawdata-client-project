@@ -152,32 +152,24 @@ public final class S3RawdataClientInitializer implements RawdataClientInitialize
         if (value == null) {
             return null;
         }
-        switch (value) {
-            case "AES256":
-                return ServerSideEncryption.AES256;
-            case "aws:kms":
-                return ServerSideEncryption.AWS_KMS;
-            default:
-                throw new IllegalArgumentException("Configuration '" + SSE + "' must be AES256 or aws:kms: " + value);
-        }
+        return switch (value) {
+            case "AES256" -> ServerSideEncryption.AES256;
+            case "aws:kms" -> ServerSideEncryption.AWS_KMS;
+            default -> throw new IllegalArgumentException("Configuration '" + SSE + "' must be AES256 or aws:kms: " + value);
+        };
     }
 
     private static IdentityProvider<? extends AwsCredentialsIdentity> credentials(Map<String, String> configuration) {
         String kind = AvroConfiguration.optional(configuration, CREDENTIALS, "default");
-        switch (kind) {
-            case "default":
-                return DefaultCredentialsProvider.builder().build();
-            case "profile":
-                return ProfileCredentialsProvider.builder().profileName(AvroConfiguration.required(configuration, PROFILE)).build();
-            case "static":
-                return StaticCredentialsProvider.create(AwsBasicCredentials.create(
-                        AvroConfiguration.required(configuration, ACCESS_KEY_ID),
-                        AvroConfiguration.required(configuration, SECRET_ACCESS_KEY)));
-            case "anonymous":
-                return AnonymousCredentialsProvider.create();
-            default:
-                throw new IllegalArgumentException("Configuration '" + CREDENTIALS
-                        + "' must be default, profile, static or anonymous: " + kind);
-        }
+        return switch (kind) {
+            case "default" -> DefaultCredentialsProvider.builder().build();
+            case "profile" -> ProfileCredentialsProvider.builder().profileName(AvroConfiguration.required(configuration, PROFILE)).build();
+            case "static" -> StaticCredentialsProvider.create(AwsBasicCredentials.create(
+                    AvroConfiguration.required(configuration, ACCESS_KEY_ID),
+                    AvroConfiguration.required(configuration, SECRET_ACCESS_KEY)));
+            case "anonymous" -> AnonymousCredentialsProvider.create();
+            default -> throw new IllegalArgumentException("Configuration '" + CREDENTIALS
+                    + "' must be default, profile, static or anonymous: " + kind);
+        };
     }
 }

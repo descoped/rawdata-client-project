@@ -50,9 +50,17 @@ final class GcsClient {
     private static final Duration REQUEST_TIMEOUT = Duration.ofMinutes(5);
     private static final ObjectMapper JSON = new ObjectMapper();
 
+    /**
+     * Waits between attempts; a test passes one that does not sleep.
+     */
+    interface Sleeper {
+        void sleep(long millis) throws InterruptedException;
+    }
+
     private final HttpClient http;
     private final String endpoint;
     private final GcsCredentials credentials;
+    private final Sleeper sleeper;
     private final AtomicReference<Runnable> throttled = new AtomicReference<>(() -> { });
 
     /**
@@ -62,13 +70,25 @@ final class GcsClient {
      * @param credentials what authorizes the requests
      */
     GcsClient(String endpoint, GcsCredentials credentials) {
-        this(HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build(), endpoint, credentials);
+        this(defaultHttp(), endpoint, credentials);
     }
 
     GcsClient(HttpClient http, String endpoint, GcsCredentials credentials) {
+        this(http, endpoint, credentials, TimeUnit.MILLISECONDS::sleep);
+    }
+
+    GcsClient(HttpClient http, String endpoint, GcsCredentials credentials, Sleeper sleeper) {
         this.http = http;
         this.endpoint = endpoint.endsWith("/") ? endpoint.substring(0, endpoint.length() - 1) : endpoint;
         this.credentials = credentials;
+        this.sleeper = sleeper;
+    }
+
+    /**
+     * The HTTP client the provider uses, with its connect timeout; its credentials share it.
+     */
+    static HttpClient defaultHttp() {
+        return HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build();
     }
 
     /**
@@ -194,11 +214,7 @@ final class GcsClient {
             return OptionalLong.empty();
         }
         expect(response, "Reading the metadata of " + object);
-        JsonNode generation = JSON.readTree(response.body()).path("generation");
-        if (generation.isMissingNode() || generation.isNull()) {
-            throw new IOException("GCS returned no generation for " + object);
-        }
-        return OptionalLong.of(generation.isNumber() ? generation.asLong() : Long.parseLong(generation.asText()));
+        return OptionalLong.of(number(JSON.readTree(response.body()), "generation", object));
     }
 
     /**
@@ -237,14 +253,18 @@ final class GcsClient {
     }
 
     /**
-     * Deletes an object; does nothing if there is none.
+     * Deletes an object.
+     *
+     * @return whether it was there; GCS answers a missing bucket as a missing object, so false is either
      */
-    void delete(String bucket, String object) throws IOException {
+    boolean delete(String bucket, String object) throws IOException {
         URI uri = URI.create(objectUri(bucket, object));
         HttpResponse<byte[]> response = send(() -> HttpRequest.newBuilder(uri).DELETE());
-        if (response.statusCode() != NOT_FOUND) {
-            expect(response, "Deleting " + object);
+        if (response.statusCode() == NOT_FOUND) {
+            return false;
         }
+        expect(response, "Deleting " + object);
+        return true;
     }
 
     private String bucketUri(String bucket) {
@@ -327,10 +347,10 @@ final class GcsClient {
         return status == 408 || status == 429 || status >= 500;
     }
 
-    private static void backOff(int attempt) throws InterruptedIOException {
+    private void backOff(int attempt) throws InterruptedIOException {
         long ceiling = Math.min(MAX_BACKOFF_MILLIS, FIRST_BACKOFF_MILLIS << (attempt - 1));
         try {
-            TimeUnit.MILLISECONDS.sleep(ThreadLocalRandom.current().nextLong(ceiling / 2, ceiling + 1));
+            sleeper.sleep(ThreadLocalRandom.current().nextLong(ceiling / 2, ceiling + 1));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw interrupted(e);

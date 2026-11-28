@@ -62,8 +62,8 @@ final class FilesystemAvroStore implements AvroStore {
             forceFolder(target.getParent());
             return true;
         } catch (FileAlreadyExistsException e) {
-            // as in every store: the same bytes are this writer's segment (an Avro file has a random sync marker);
-            // compared on disk, never read into memory
+            // As in every store, the same bytes mean this writer's segment, since an Avro file has a random sync
+            // marker. They are compared on disk, never read into memory.
             return Files.size(target) == content.length && Files.mismatch(target, temporary) == -1;
         } finally {
             Files.deleteIfExists(temporary);
@@ -190,11 +190,25 @@ final class FilesystemAvroStore implements AvroStore {
     }
 
     /**
-     * Creates the folders below the storage folder, never the storage folder or its parents.
+     * Creates the folders below the storage folder, one level at a time from it down, so a storage folder that is gone
+     * fails with {@link NoSuchFileException} and is never created again, not even when it goes while this runs. Each
+     * folder created is forced into its parent, so a new topic's folders survive a power loss with its first segment.
      */
     private void createBelowFolder(Path below) throws IOException {
         requireFolder();
-        Files.createDirectories(below);
+        Path parent = folder;
+        for (Path name : folder.relativize(below)) {
+            Path next = parent.resolve(name);
+            try {
+                Files.createDirectory(next);
+                forceFolder(parent);
+            } catch (FileAlreadyExistsException e) {
+                if (!Files.isDirectory(next)) {
+                    throw e;
+                }
+            }
+            parent = next;
+        }
     }
 
     /**

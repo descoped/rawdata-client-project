@@ -18,19 +18,20 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -243,10 +244,8 @@ class FilesystemProviderTest {
             ((AvroRawdataClient) client).flush("t");
             deleteTree(storage);
             RawdataMessage b = message("b");
-            assertThrows(RawdataException.class, () -> { // when the next window opens, or when it uploads
-                producer.publish(b);
-                ((AvroRawdataClient) client).flush("t");
-            });
+            assertThrows(RawdataException.class, () -> publishAndUpload(client, producer, b),
+                    "fails when the next window opens, or when it uploads");
             assertFalse(Files.exists(storage), "the storage folder is not created again");
             assertThrows(RawdataException.class, () -> client.lastMessage("u"), "a read fails, never finds an empty topic");
         } finally {
@@ -254,9 +253,14 @@ class FilesystemProviderTest {
         }
     }
 
+    private static void publishAndUpload(RawdataClient client, RawdataProducer producer, RawdataMessage message) {
+        producer.publish(message);
+        ((AvroRawdataClient) client).flush("t");
+    }
+
     private static void deleteTree(Path root) throws IOException {
         try (Stream<Path> paths = Files.walk(root)) {
-            for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+            for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
                 Files.delete(path);
             }
         }

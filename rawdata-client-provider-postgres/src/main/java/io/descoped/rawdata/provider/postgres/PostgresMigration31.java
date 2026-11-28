@@ -49,6 +49,8 @@ final class PostgresMigration31 {
     private static final String DONE = "rawdata_v31_migrated";
     private static final String TO_MIGRATE = "=true";
     private static final int LISTED = 20;
+    private static final String ALTER_TABLE = "ALTER TABLE ";
+    private static final String RENAME_TO = " RENAME TO ";
 
     /**
      * The tables of the schema that tell the state of a move, as one snapshot of the catalog sees them.
@@ -83,9 +85,9 @@ final class PostgresMigration31 {
                 + " bool_or(c.relname = '" + PROGRESS + "'), bool_or(c.relname = '" + DONE + "')" + inSchema;
         tableExists = "SELECT count(*) = 1" + inSchema + " AND c.relname = ?";
         fence = List.of(
-                "ALTER TABLE " + schema.table(MESSAGE) + " RENAME TO " + FENCED_MESSAGE,
-                "ALTER TABLE " + schema.table(CONTENT) + " RENAME TO " + FENCED_CONTENT,
-                "ALTER TABLE " + oldMetadata + " RENAME TO " + FENCED_METADATA,
+                ALTER_TABLE + schema.table(MESSAGE) + RENAME_TO + FENCED_MESSAGE,
+                ALTER_TABLE + schema.table(CONTENT) + RENAME_TO + FENCED_CONTENT,
+                ALTER_TABLE + oldMetadata + RENAME_TO + FENCED_METADATA,
                 "CREATE TABLE " + progress + " (topic varchar(100) COLLATE \"C\" PRIMARY KEY, done boolean NOT NULL DEFAULT false)",
                 "INSERT INTO " + progress + " (topic) SELECT topic FROM " + schema.table(FENCED_MESSAGE)
                         + " UNION SELECT topic FROM " + schema.table(FENCED_METADATA));
@@ -96,7 +98,7 @@ final class PostgresMigration31 {
         pending = "SELECT topic FROM " + progress + " WHERE NOT done ORDER BY topic";
         claim = "SELECT done FROM " + progress + " WHERE topic = ?";
         markDone = "UPDATE " + progress + " SET done = true WHERE topic = ?";
-        finish = "ALTER TABLE " + progress + " RENAME TO " + DONE;
+        finish = ALTER_TABLE + progress + RENAME_TO + DONE;
     }
 
     /**
@@ -236,7 +238,10 @@ final class PostgresMigration31 {
      * Moves the topics not done, each in a transaction of its own, then finishes the move if none failed.
      */
     private void moveAll() {
-        List<String> left = jdbc.transaction("list the topics left to move from 3.1", this::pending);
+        List<String> left = jdbc.transaction("list the topics left to move from 3.1", connection -> {
+            PostgresSchema.lockShared(connection, fenceLockKey); // as a move, so finish() cannot rename under it
+            return state(connection).progress() ? pending(connection) : List.<String>of();
+        });
         int moved = 0;
         TreeSet<String> failed = new TreeSet<>();
         RawdataException first = null;

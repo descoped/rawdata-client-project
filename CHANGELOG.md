@@ -93,9 +93,12 @@
   - A publish's lock is keyed by the topic's number: two topics of one schema never wait on each other.
   - Requirements: a writer needs `USAGE, CREATE` on the schema; a reader `USAGE` and `SELECT` (default privileges for
     the writer's tables). A logical replica or change-data-capture feed needs each new topic's tables created too.
-  - **Data written by 3.1 and earlier** is in the shared tables `rawdata_message`, `rawdata_content` and
-    `rawdata_metadata`, which this version neither reads nor drops. Move it with the copy tool, through `filesystem`:
-    `rawdata-copy` 3.1.0 from postgres to a folder, then this version's from the folder into postgres.
+  - **Data written by 3.1 and earlier**, in the shared tables `rawdata_message`, `rawdata_content` and
+    `rawdata_metadata`, is moved inside PostgreSQL when a client starts with `postgres.migrate-3.1=true` (Ove,
+    2026-11-28). It renames the old tables to `rawdata_v31_*` (kept, never dropped), so a 3.1 writer still running
+    fails, then moves each topic in a transaction of its own, keeping ids, order and content, and resumes if it
+    stops. A metadata key over 127 bytes, or a topic both versions wrote, refuses the move and changes nothing.
+    Without the key, a client refuses to start on 3.1 data not moved, so its topics never read as empty.
 - postgres: a publish that waited for its turn while its producer closed writes nothing and throws
   `RawdataClosedException`; a publish under way when the client closes is reported as `RawdataClosedException` (it
   was a plain `RawdataException`) and writes nothing.

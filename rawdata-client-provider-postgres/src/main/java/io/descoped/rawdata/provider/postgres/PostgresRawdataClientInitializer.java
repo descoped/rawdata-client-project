@@ -28,6 +28,9 @@ import java.util.TreeSet;
  *     <tr><td>{@code postgres.schema}</td><td>{@code public}: the schema of the client's topics, an unquoted
  *     identifier (a-z, 0-9, _); one schema per class of data keeps topics of different sensitivity under different
  *     grants. It must exist.</td></tr>
+ *     <tr><td>{@code postgres.migrate-3.1}</td><td>{@code false}: {@code true} moves the topics 3.1 wrote in the
+ *     schema's shared tables to tables of their own when the client starts, resuming a move that stopped. Without
+ *     it, a client refuses to start on a schema with 3.1 data not moved.</td></tr>
  *     <tr><td>{@code rawdata.limits.max-position-bytes}, {@code rawdata.limits.max-publish-bytes}</td><td>the limits
  *     of a publish, as in every provider: {@link RawdataLimits}</td></tr>
  *     <tr><td>{@code rawdata.postgres.consumer.prefetch-size}</td><td>{@code 100}: messages per fetch</td></tr>
@@ -60,6 +63,7 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
     static final String DATABASE = "postgres.driver.database";
     static final String MAX_POOL_SIZE = "postgres.driver.max-pool-size";
     static final String SCHEMA = "postgres.schema";
+    static final String MIGRATE_31 = "postgres.migrate-3.1";
     static final String PREFETCH_SIZE = "rawdata.postgres.consumer.prefetch-size";
     static final String POLL_INTERVAL = "rawdata.postgres.consumer.prefetch-poll-interval-when-empty";
     static final String WAKE_ON_PUBLISH = "rawdata.postgres.consumer.wake-on-publish";
@@ -96,6 +100,7 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
         int pollIntervalMillis = positive(configuration, POLL_INTERVAL, 250);
         boolean wakeOnPublish = bool(configuration, WAKE_ON_PUBLISH, true);
         int lockTimeoutMillis = positive(configuration, LOCK_TIMEOUT, 0);
+        boolean migrate = bool(configuration, MIGRATE_31, false);
 
         HikariConfig config = new HikariConfig();
         config.setPoolName("rawdata-postgres");
@@ -123,7 +128,9 @@ public class PostgresRawdataClientInitializer implements RawdataClientInitialize
             throw new RawdataException("PostgreSQL: " + e.getMessage(), e);
         }
         try {
-            schema.create(new Jdbc(dataSource, () -> false));
+            Jdbc jdbc = new Jdbc(dataSource, () -> false);
+            schema.create(jdbc);
+            new PostgresMigration31(jdbc, schema).run(migrate);
         } catch (RuntimeException e) {
             dataSource.close();
             throw e;

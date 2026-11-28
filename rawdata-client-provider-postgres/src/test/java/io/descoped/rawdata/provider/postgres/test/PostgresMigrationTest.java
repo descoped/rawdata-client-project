@@ -227,6 +227,7 @@ class PostgresMigrationTest {
             assertFalse(exists(schema + ".rawdata_" + kind));
             assertTrue(exists(schema + ".rawdata_v31_" + kind), "the old tables are kept: " + kind);
         }
+        assertTrue(exists(schema + ".rawdata_v31_migrated"));
         assertEquals(4, count("SELECT count(*) FROM " + schema + ".rawdata_v31_message"));
         try (RawdataClient again = RawdataClient.create(configuration)) {
             assertEquals(4, readAll(again, "a").size(), "after the move a client starts without the key");
@@ -234,31 +235,35 @@ class PostgresMigrationTest {
     }
 
     /**
-     * A move that stops at a topic keeps the topics already moved, refuses a client without the key while topics
-     * are left, and resumes with the topics left when started with the key again.
+     * A topic that cannot be moved is listed after the others are moved; while it is left a client without the key
+     * refuses to start, and a start with the key again moves it and finishes the move.
      */
     @Test
-    void aMoveThatStoppedResumes() throws Exception {
+    void aTopicThatCannotMoveIsListedAndTheMoveResumes() throws Exception {
         Map<String, String> configuration = Postgres18.configurationInNewSchema();
         String schema = configuration.get("postgres.schema");
+        Map<String, String> withKey = migrating(configuration);
         create31(schema);
         write31(schema, "a", RawdataIds.generate(), "pa", "k");
         write31(schema, "b", RawdataIds.generate(), "pb", "k");
-        // topics move in name order: a gets number 1, b number 2, whose content table is taken
-        execute("CREATE TABLE " + schema + ".rawdata_2_content (blocker int)");
-        assertThrows(RawdataException.class, () -> RawdataClient.create(migrating(configuration)));
-        assertEquals(1, count("SELECT count(*) FROM " + schema + ".rawdata_v31_migration WHERE done"));
-        assertEquals(1, count("SELECT count(*) FROM " + schema + ".rawdata_1_message"), "topic a is moved");
+        // topics move in name order: a gets number 1, whose content table is taken
+        execute("CREATE TABLE " + schema + ".rawdata_1_content (blocker int)");
+        RawdataException failed = assertThrows(RawdataException.class, () -> RawdataClient.create(withKey));
+        assertTrue(failed.getMessage().contains("could not move 1 topics") && failed.getMessage().contains(": a."),
+                failed.getMessage());
+        assertEquals(1, count("SELECT count(*) FROM " + schema + ".rawdata_v31_migration WHERE done"), "b is moved");
 
         RawdataException unfinished = assertThrows(RawdataException.class, () -> RawdataClient.create(configuration));
         assertTrue(unfinished.getMessage().contains("not finished"), unfinished.getMessage());
 
-        execute("DROP TABLE " + schema + ".rawdata_2_content");
-        try (RawdataClient client = RawdataClient.create(migrating(configuration))) {
+        execute("DROP TABLE " + schema + ".rawdata_1_content");
+        try (RawdataClient client = RawdataClient.create(withKey)) {
             assertEquals(List.of("pa"), readAll(client, "a").stream().map(RawdataMessage::position).toList());
             assertEquals(List.of("pb"), readAll(client, "b").stream().map(RawdataMessage::position).toList());
         }
-        assertEquals(0, count("SELECT count(*) FROM " + schema + ".rawdata_v31_migration WHERE NOT done"));
+        assertFalse(exists(schema + ".rawdata_v31_migration"), "a finished move renames its progress table");
+        assertEquals(2, count("SELECT count(*) FROM " + schema + ".rawdata_v31_migrated WHERE done"));
+        RawdataClient.create(configuration).close();
     }
 
     /**
@@ -269,17 +274,19 @@ class PostgresMigrationTest {
     void a31WriterAfterTheMoveIsNeverLostUnseen() throws Exception {
         Map<String, String> configuration = Postgres18.configurationInNewSchema();
         String schema = configuration.get("postgres.schema");
+        Map<String, String> withKey = migrating(configuration);
         create31(schema);
         write31(schema, "a", RawdataIds.generate(), "pa");
         RawdataClient.create(migrating(configuration)).close();
-        assertThrows(SQLException.class, () -> write31(schema, "a", RawdataIds.generate(), "late"),
+        UUID late = RawdataIds.generate();
+        assertThrows(SQLException.class, () -> write31(schema, "a", late, "late"),
                 "a running 3.1 writer fails: its tables are gone");
 
         create31(schema); // a restarted 3.1 client makes its tables again
         write31(schema, "a", RawdataIds.generate(), "late");
         RawdataException refused = assertThrows(RawdataException.class, () -> RawdataClient.create(configuration));
         assertTrue(refused.getMessage().contains("3.1 tables again"), refused.getMessage());
-        assertThrows(RawdataException.class, () -> RawdataClient.create(migrating(configuration)));
+        assertThrows(RawdataException.class, () -> RawdataClient.create(withKey));
     }
 
     /**
@@ -290,10 +297,11 @@ class PostgresMigrationTest {
     void aLongMetadataKeyRefusesTheMoveChangingNothing() throws Exception {
         Map<String, String> configuration = Postgres18.configurationInNewSchema();
         String schema = configuration.get("postgres.schema");
+        Map<String, String> withKey = migrating(configuration);
         create31(schema);
         write31(schema, "a", RawdataIds.generate(), "pa");
         metadata31(schema, "a", "long-" + "k".repeat(200), new byte[]{1});
-        RawdataException refused = assertThrows(RawdataException.class, () -> RawdataClient.create(migrating(configuration)));
+        RawdataException refused = assertThrows(RawdataException.class, () -> RawdataClient.create(withKey));
         assertTrue(refused.getMessage().contains("a: long-kkk"), refused.getMessage());
         assertTrue(exists(schema + ".rawdata_message"), "nothing is renamed");
         assertEquals(0, count("SELECT count(*) FROM " + schema + ".rawdata_topic"));
@@ -306,12 +314,13 @@ class PostgresMigrationTest {
     void aTopicWrittenByBothVersionsRefusesTheMove() throws Exception {
         Map<String, String> configuration = Postgres18.configurationInNewSchema();
         String schema = configuration.get("postgres.schema");
+        Map<String, String> withKey = migrating(configuration);
         try (RawdataClient client = RawdataClient.create(configuration); RawdataProducer producer = client.producer("a")) {
             producer.publish(RawdataMessage.builder().position("new").build());
         }
         create31(schema);
         write31(schema, "a", RawdataIds.generate(), "old");
-        RawdataException refused = assertThrows(RawdataException.class, () -> RawdataClient.create(migrating(configuration)));
+        RawdataException refused = assertThrows(RawdataException.class, () -> RawdataClient.create(withKey));
         assertTrue(refused.getMessage().contains("both by 3.1 and by this version"), refused.getMessage());
         assertTrue(exists(schema + ".rawdata_message"), "nothing is renamed");
     }
@@ -323,18 +332,19 @@ class PostgresMigrationTest {
     void clientsStartedTogetherMoveEachTopicOnce() throws Exception {
         Map<String, String> configuration = Postgres18.configurationInNewSchema();
         String schema = configuration.get("postgres.schema");
+        Map<String, String> withKey = migrating(configuration);
         create31(schema);
         for (int t = 0; t < 10; t++) {
             for (int m = 0; m < 5; m++) {
                 write31(schema, "t" + t, RawdataIds.generate(), "p" + m, "k");
             }
         }
-        ExecutorService pool = Executors.newFixedThreadPool(4);
+        ExecutorService pool = Executors.newFixedThreadPool(8);
         try {
             List<Future<Void>> started = new ArrayList<>();
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 8; i++) {
                 Callable<Void> start = () -> {
-                    RawdataClient.create(migrating(configuration)).close();
+                    RawdataClient.create(withKey).close();
                     return null;
                 };
                 started.add(pool.submit(start));

@@ -473,10 +473,14 @@ into tables of their own, inside PostgreSQL, when a client starts with `postgres
    3. It moves each topic in a transaction of its own, under the topic's creation lock: registers it, creates its
       tables, copies its messages, content and metadata with `INSERT … SELECT`, and marks it done. Ids, order,
       positions and content are kept, so a consumer's saved id stays valid; PostgreSQL computes the position hashes
-      as the rows go in. A move that stops (a crash, a failed topic) keeps the topics moved, and the next start with
-      the key resumes with the rest.
+      as the rows go in. A topic that cannot be moved does not stop the others: the start fails at the end, listing
+      it. A move that stops (a crash, a failed topic) keeps the topics moved, and the next start with the key resumes
+      with the rest.
+   4. Once every topic is done, it renames `rawdata_v31_migration` to `rawdata_v31_migrated`. From then on a start
+      reads only the catalog, so readers need no privilege on the migration's tables.
 3. **Start the other clients without the key.** Leave it off from then on: once the move is done it does nothing.
-4. **Drop the old tables** (`rawdata_v31_*` and `rawdata_v31_migration`) when you no longer need them. Nothing drops
+4. **Drop the old tables** (`rawdata_v31_message`, `_content`, `_metadata` and `_migrated`) when you no longer need
+   them. Nothing drops
    them; until then the schema holds the data twice.
 
 Without the key, a client refuses to start on a schema that has 3.1 tables, or a move not finished, naming the key, so
@@ -525,6 +529,7 @@ to the original exception as suppressed, never in its place.
 | `RawdataException: PostgreSQL role may not create topic …` from a publish or metadata `put` | the topic is new, and the role lacks `CREATE` on the schema or `INSERT` on a registry another role owns; the server's message says which | write with the schema's writer, or grant `USAGE, CREATE` on the schema (and `SELECT, INSERT` on `rawdata_topic`) |
 | `RawdataException: PostgreSQL schema '…' holds topics written by 3.1 …` or `… a migration from 3.1 not finished …` from `create` | the schema has 3.1's shared tables, or a move that stopped | stop the 3.1 clients and start one client with `postgres.migrate-3.1=true` |
 | `RawdataException: PostgreSQL schema '…' has metadata keys over 127 bytes …` or `… topics written both by 3.1 and by this version …` from `create` with the key | the move cannot keep them as they are; nothing was changed | rename or remove the listed metadata keys in `rawdata_metadata`, or copy the listed topics by hand, then start again |
+| `RawdataException: PostgreSQL could not move … topics written by 3.1 …` from `create` with the key | the listed topics could not be moved (the others are); the causes are attached | fix the cause and start again with the key; or copy the topic by hand from `rawdata_v31_*` and mark it: `UPDATE rawdata_v31_migration SET done = true WHERE topic = '…'` |
 | `RawdataException: PostgreSQL schema '…' has 3.1 tables again …` from `create` | a 3.1 client made its tables again after the move began, and may have written to them | stop it, move or drop what it wrote, then start again |
 | `RawdataException: PostgreSQL hashes positions differently …` from `create` | the server's `hashtextextended` differs from the one the stored hashes were made with (after `pg_upgrade` to a version that changed it) | run the statements in the message: `UPDATE rawdata_<n>_message SET position = position` for each topic, then `UPDATE rawdata_probe SET word = word` |
 | `RawdataWriterConflictException` from `publish` | another process wrote the topic since this client last did | see below |
@@ -576,9 +581,10 @@ and each test uses topics of its own. They run on the class path, where the prov
 - [`PostgresMigrationTest`][PostgresMigrationTest.java]
   moves tables made by 3.1's own DDL: a start without the key is refused and changes nothing; every topic is moved
   with its ids, order, content in key order and metadata, a seek finds a moved message, and a publish continues
-  after the last moved id; a move that stopped resumes; a 3.1 writer after the fence fails, and its tables made again
-  stop the start; a long metadata key or a topic both versions wrote refuses the move, changing nothing; clients
-  started together move each topic once.
+  after the last moved id; a 3.1 writer after the fence fails, and its tables made again
+  stop the start; a long metadata key or a topic both versions wrote refuses the move, changing nothing; a topic that
+  cannot move is listed after the others are moved, and the move resumes and finishes; eight clients started together
+  move each topic once.
 - [`PostgresProviderTest`][PostgresProviderTest.java]
   checks what the contract cannot see: stored ids are PostgreSQL UUIDv7s; PostgreSQL orders ids as `RawdataIds.ORDER`
   does; a publish waiting for the topic lock reads the holder's commit even when the role defaults to REPEATABLE

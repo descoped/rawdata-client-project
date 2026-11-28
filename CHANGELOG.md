@@ -99,6 +99,16 @@
     fails, then moves each topic in a transaction of its own, keeping ids, order and content, and resumes if it
     stops. A metadata key over 127 bytes, or a topic both versions wrote, refuses the move and changes nothing.
     Without the key, a client refuses to start on 3.1 data not moved, so its topics never read as empty.
+- filesystem (design review fs-1 to fs-3, fs-5 to fs-7):
+  - A storage folder removed or unmounted while a client runs fails every read and write with `RawdataException`, as
+    a missing bucket does. Before, it read as empty topics, and the next upload created it again, holding a topic that
+    began at a later segment. The store now passes `AvroStoreContractTest.aMissingLocationFails`.
+  - `exists` throws when the file system fails. Before, a failure read as a missing segment, which could make a writer
+    take an earlier segment for the topic's end and report a false writer conflict.
+  - Segments and metadata are forced to disk before they are reported written (the temporary file before its link or
+    move, the folder after it), so an uploaded window survives a power loss, as the durability rule says. Two `fsync`
+    calls per uploaded window.
+  - A segment number taken by other bytes is compared on disk, never read into memory.
 - postgres: a publish that waited for its turn while its producer closed writes nothing and throws
   `RawdataClosedException`; a publish under way when the client closes is reported as `RawdataClosedException` (it
   was a plain `RawdataException`) and writes nothing.

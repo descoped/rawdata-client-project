@@ -14,7 +14,6 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
-import java.util.Arrays;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -31,6 +30,12 @@ import java.util.stream.Stream;
  * deleted. The folder must be on a file system with hard links and atomic moves, as local file systems on Linux,
  * macOS and Windows are.
  * <p>
+ * The storage folder itself is never created here (the initializer creates it): a folder that is gone, removed or
+ * unmounted, fails every call with {@link NoSuchFileException}, as a missing bucket does, instead of reading as empty
+ * topics. A file is forced to disk before it is linked or moved to its name, and the folder that holds the name after
+ * it, so a segment or metadata entry that a call reported written survives a power loss, not only a crash of the
+ * process.
+ * <p>
  * The topic folder is the topic's name, kept apart from others on case-insensitive file systems (macOS, Windows) and
  * valid on Windows: an upper-case letter is written as {@code ^} and the letter in lower case, a trailing {@code .}
  * gets a {@code ^} after it, and a Windows device name ({@code con}, {@code nul}, {@code com1}...) gets {@code ~}
@@ -39,6 +44,7 @@ import java.util.stream.Stream;
 final class FilesystemAvroStore implements AvroStore {
 
     private static final int MAX_NAME_LENGTH = 255;
+    private static final boolean WINDOWS = System.getProperty("os.name", "").startsWith("Windows");
 
     private final Path folder;
 
@@ -49,14 +55,16 @@ final class FilesystemAvroStore implements AvroStore {
     @Override
     public boolean create(String topic, long segment, byte[] content) throws IOException {
         Path target = segment(topic, segment);
-        Files.createDirectories(target.getParent());
+        createBelowFolder(target.getParent());
         Path temporary = temporaryFile(topic, content);
         try {
             Files.createLink(target, temporary);
+            forceFolder(target.getParent());
             return true;
         } catch (FileAlreadyExistsException e) {
-            // as in every store: the same bytes are this writer's segment (an Avro file has a random sync marker)
-            return readIfExists(target).map(stored -> Arrays.equals(content, stored)).orElse(false);
+            // As in every store, the same bytes mean this writer's segment, since an Avro file has a random sync
+            // marker. They are compared on disk, never read into memory.
+            return Files.size(target) == content.length && Files.mismatch(target, temporary) == -1;
         } finally {
             Files.deleteIfExists(temporary);
         }
@@ -74,6 +82,7 @@ final class FilesystemAvroStore implements AvroStore {
         try {
             opened = Files.readAttributes(file, BasicFileAttributes.class);
         } catch (NoSuchFileException e) {
+            requireFolder();
             return Optional.empty();
         }
         Object key = opened.fileKey();
@@ -106,9 +115,19 @@ final class FilesystemAvroStore implements AvroStore {
         });
     }
 
+    /**
+     * Whether a segment exists; a failure of the file system is thrown, never read as a missing segment, which would
+     * make a writer take an earlier segment for the topic's end.
+     */
     @Override
-    public boolean exists(String topic, long segment) {
-        return Files.exists(segment(topic, segment));
+    public boolean exists(String topic, long segment) throws IOException {
+        try {
+            Files.readAttributes(segment(topic, segment), BasicFileAttributes.class);
+            return true;
+        } catch (NoSuchFileException e) {
+            requireFolder();
+            return false;
+        }
     }
 
     @Override
@@ -117,7 +136,7 @@ final class FilesystemAvroStore implements AvroStore {
         try (Stream<Path> files = Files.list(metadata(topic))) {
             files.forEach(file -> names.add(file.getFileName().toString()));
         } catch (NoSuchFileException e) {
-            // no metadata yet
+            requireFolder(); // otherwise no metadata yet
         }
         return names;
     }
@@ -127,10 +146,11 @@ final class FilesystemAvroStore implements AvroStore {
         return readIfExists(metadata(topic, name));
     }
 
-    private static Optional<byte[]> readIfExists(Path file) throws IOException {
+    private Optional<byte[]> readIfExists(Path file) throws IOException {
         try {
             return Optional.of(Files.readAllBytes(file));
         } catch (NoSuchFileException e) {
+            requireFolder();
             return Optional.empty();
         }
     }
@@ -138,10 +158,11 @@ final class FilesystemAvroStore implements AvroStore {
     @Override
     public void writeMetadata(String topic, String name, byte[] value) throws IOException {
         Path target = metadata(topic, name);
-        Files.createDirectories(target.getParent());
+        createBelowFolder(target.getParent());
         Path temporary = temporaryFile(topic, value);
         try {
             Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            forceFolder(target.getParent());
         } finally {
             Files.deleteIfExists(temporary);
         }
@@ -149,7 +170,9 @@ final class FilesystemAvroStore implements AvroStore {
 
     @Override
     public void deleteMetadata(String topic, String name) throws IOException {
-        Files.deleteIfExists(metadata(topic, name));
+        if (!Files.deleteIfExists(metadata(topic, name))) {
+            requireFolder();
+        }
     }
 
     @Override
@@ -157,12 +180,66 @@ final class FilesystemAvroStore implements AvroStore {
         // nothing to release
     }
 
+    /**
+     * The storage folder must be there: a missing one is a missing store, never empty topics.
+     */
+    private void requireFolder() throws IOException {
+        BasicFileAttributes attributes;
+        try {
+            attributes = Files.readAttributes(folder, BasicFileAttributes.class); // any other failure is its own cause
+        } catch (NoSuchFileException e) {
+            throw new NoSuchFileException(folder.toString(), null, "the storage folder does not exist");
+        }
+        if (!attributes.isDirectory()) {
+            throw new NoSuchFileException(folder.toString(), null, "the storage folder is not a folder");
+        }
+    }
+
+    /**
+     * Creates the folders below the storage folder, one level at a time from it down, so a storage folder that is gone
+     * fails with {@link NoSuchFileException} and is never created again, not even when it goes while this runs. Each
+     * folder created is forced into its parent, so a new topic's folders survive a power loss with its first segment.
+     */
+    private void createBelowFolder(Path below) throws IOException {
+        requireFolder();
+        Path parent = folder;
+        for (Path name : folder.relativize(below)) {
+            Path next = parent.resolve(name);
+            try {
+                Files.createDirectory(next);
+                forceFolder(parent);
+            } catch (FileAlreadyExistsException e) {
+                if (!Files.isDirectory(next)) {
+                    throw e;
+                }
+            }
+            parent = next;
+        }
+    }
+
+    /**
+     * Forces a folder's entries to disk, so a name just linked or moved into it survives a power loss. Windows cannot
+     * open a folder for this, and keeps its directory entries in its own journal.
+     */
+    private static void forceFolder(Path directory) throws IOException {
+        if (WINDOWS) {
+            return;
+        }
+        try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
+            channel.force(true);
+        }
+    }
+
     private Path temporaryFile(String topic, byte[] content) throws IOException {
         Path topicFolder = topicFolder(topic);
-        Files.createDirectories(topicFolder);
+        createBelowFolder(topicFolder);
         Path temporary = Files.createTempFile(topicFolder, ".", ".tmp");
-        try {
-            Files.write(temporary, content);
+        try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
+            ByteBuffer bytes = ByteBuffer.wrap(content);
+            while (bytes.hasRemaining()) {
+                channel.write(bytes);
+            }
+            channel.force(true); // on disk before its name is linked or moved, and the window deleted
         } catch (IOException | RuntimeException e) {
             Files.deleteIfExists(temporary);
             throw e;
@@ -184,8 +261,8 @@ final class FilesystemAvroStore implements AvroStore {
 
     private Path metadata(String topic, String name) {
         if (name.length() > MAX_NAME_LENGTH) {
-            throw new IllegalArgumentException("A metadata key of the filesystem provider is at most "
-                    + (MAX_NAME_LENGTH - 1) / 2 + " bytes in UTF-8");
+            throw new IllegalArgumentException("A metadata name of the filesystem store is at most " + MAX_NAME_LENGTH
+                    + " characters, a file name: " + name.length());
         }
         return metadata(topic).resolve(name);
     }
